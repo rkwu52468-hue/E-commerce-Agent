@@ -1,0 +1,81 @@
+{
+  "dataset_version": "demo-2026-11-03",
+  "simulated": true,
+  "customers": [
+    "alice",
+    "bob"
+  ],
+  "products": {
+    "P100": {
+      "product_id": "P100",
+      "name": "示例保温杯",
+      "price_cents": 16900,
+      "currency": "CNY",
+      "capacity_ml": 500,
+      "source": "shop.json#products.P100"
+    }
+  },
+  "policies": {
+    "returns": {
+      "policy_id": "returns",
+      "version": "demo-2026-11-03",
+      "title": "模拟店铺退换货政策",
+      "text": "本示例店铺允许收货后7天内提交未使用商品的退货申请；需保留包装，具体申请由人工审核。此规则为课程虚构数据。",
+      "source": "shop.json#policies.returns"
+    }
+  },
+  "orders": {
+    "A1001": {
+      "order_id": "A1001",
+      "customer_id": "alice",
+      "product_id": "P100",
+      "quantity": 1,
+      "total_cents": 16900,
+      "currency": "CNY",
+      "status": "shipped",
+      "source": "shop.json#orders.A1001",
+      "tracking": {
+        "tracking_id": "DEMO-A1001",
+        "status": "delayed",
+        "events": [
+          {
+            "time": "2026-11-01T09:00:00+08:00",
+            "status": "picked_up",
+            "detail": "模拟物流：已揽收"
+          },
+          {
+            "time": "2026-11-02T16:00:00+08:00",
+            "status": "in_transit",
+            "detail": "模拟物流：已到达收件区域"
+          },
+          {
+            "time": "2026-11-03T10:00:00+08:00",
+            "status": "DELIVERY_DELAY",
+            "detail": "模拟物流：配送网点积压，等待后续更新；暂无可承诺的送达时间"
+          }
+        ]
+      }
+    },
+    "B2001": {
+      "order_id": "B2001",
+      "customer_id": "bob",
+      "product_id": "P100",
+      "quantity": 2,
+      "total_cents": 33800,
+      "currency": "CNY",
+      "status": "delivered",
+      "source": "shop.json#orders.B2001",
+      "tracking": {
+        "tracking_id": "DEMO-B2001",
+        "status": "delivered",
+        "events": [
+          {
+            "time": "2026-11-02T14:00:00+08:00",
+            "status": "delivered",
+            "detail": "模拟物流：已签收"
+          }
+        ]
+      }
+    }
+  }
+}

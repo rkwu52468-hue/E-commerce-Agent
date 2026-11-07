@@ -1,0 +1,117 @@
+{
+  "repository": "https://github.com/shareAI-lab/learn-claude-code",
+  "commit": "7226f555d48900076eba126acf37c9ed5f002b5d",
+  "source_path": "s08_context_compact/code.py",
+  "source_sha256": "5b0d00d6f773ccfefc693e9ab075d480d2abac6f55f9bbbced914b41ec054abd",
+  "methods": [
+    {
+      "method": "estimate_chars",
+      "source_line": 268,
+      "sha256": "6f679ba048f04a2828aa6289e85d1fa46805c30abca570b8bb36b6aa332a4131"
+    },
+    {
+      "method": "block_type",
+      "source_line": 272,
+      "sha256": "43b8ba540aadd15e4c08dd3024995e9df4afd565d38ff89166a841844d1748b9"
+    },
+    {
+      "method": "has_tool_use",
+      "source_line": 276,
+      "sha256": "7a52f98638ad94ff26446359e523291f5cc6271b5c365feaedf9703c2773a04d"
+    },
+    {
+      "method": "is_tool_result",
+      "source_line": 285,
+      "sha256": "912c0f9916d2fb5dae2af502f4c06ae4c101baf47ce2159421d755691de74586"
+    },
+    {
+      "method": "unseen_tool_result_positions",
+      "source_line": 295,
+      "sha256": "e88e6f4063fc6c6b5d8590184352441d35805b485e334e361f77db22b18e46d1"
+    },
+    {
+      "method": "write_transcript",
+      "source_line": 312,
+      "sha256": "5fd6278559b0c147718894cd58a4f561875783a1a9139819e14c8edc99884c6c"
+    },
+    {
+      "method": "persisted_output_path",
+      "source_line": 320,
+      "sha256": "10cf305e360c09ffe354e4f9c4bda039c07443262d95bdea7f858700672f5851"
+    },
+    {
+      "method": "save_output",
+      "source_line": 340,
+      "sha256": "22f6bad8b876aecbf096bbe30f7df7f6b6bb14865e62a9ea075dc9e5dfa56837"
+    },
+    {
+      "method": "persisted_preview",
+      "source_line": 347,
+      "sha256": "0bfad493e9bf319d05d97cf24965ef65e3e7f23357ecb83e215879d65814bd58"
+    },
+    {
+      "method": "is_archive_marker",
+      "source_line": 388,
+      "sha256": "fb2031eb7e554b1b1a25f95b2cf048c474ca75f8d13107418bf54cda49833484"
+    },
+    {
+      "method": "snip_compact",
+      "source_line": 398,
+      "sha256": "81d24cf2287ecc5ff83381c0341f4c5ccd0695622b8df3479a5960d69b0f08f3"
+    },
+    {
+      "method": "micro_compact",
+      "source_line": 421,
+      "sha256": "872df2b2df7b183a4531bd1a275ac369b2fe8d7d810e6bf3ae86edcd43cc56c8"
+    },
+    {
+      "method": "fit_tool_results",
+      "source_line": 446,
+      "sha256": "dd5ae2f2727a44494156803ab497982bbfe981bbd237524686aae2ed13e1a579"
+    },
+    {
+      "method": "summary_input",
+      "source_line": 467,
+      "sha256": "7740ff9790ffee2710b1a0e036cbfeb30ed358a61bcefc3e35878192b1d47a3c"
+    },
+    {
+      "method": "summarize_history",
+      "source_line": 477,
+      "sha256": "10bb5b64ab2c3b267b5e2f8d1349313409e06f7b21321f13e4f8b3bb5981319e"
+    },
+    {
+      "method": "summary_message",
+      "source_line": 492,
+      "sha256": "1b1d69667a237619f300331ead0e307bda63aa023d3315081dae1300b344d975"
+    },
+    {
+      "method": "compact_history",
+      "source_line": 500,
+      "sha256": "12c903f629bac659dbfb20ac1e61eecdadc07f28d04d7f8ba8a36fe0a899ddba"
+    },
+    {
+      "method": "reactive_compact",
+      "source_line": 506,
+      "sha256": "608b22c86cea71e4519f5119d671d98741920d6a9a7c108f86848eb8f616689f"
+    },
+    {
+      "method": "persist_large_output",
+      "source_line": 363,
+      "sha256": "995b6ad37bc4bcc9db0b32996c3e51394d176dcf05468f9bddfd812e483a0dfa"
+    },
+    {
+      "method": "tool_result_budget",
+      "source_line": 368,
+      "sha256": "a66e1bb85be8bd640c7c2dae99c0678ce0dadc4e79de6091f2062d80f135c22a"
+    }
+  ],
+  "adaptation": "Original 20 method bodies and decorators unchanged; custom minimal initializer. Business SessionCompactor uses UUID output filenames and registers transcript paths outside vendor. Project prepare transactionally applies the original latest tool-result batch budget, then snip, micro, fit and opt-in automatic summary. Harness integrates opt-in explicit compact after complete tool batches and recognized-overflow reactive recovery. All summary paths share one attempt per user turn. Failed budget staging preserves original messages/registry and stops. Failed summary candidates preserve history; reactive permits one extra main request without repeating tools. Business guards, controlled file lookup and events live outside vendor; upstream remains unchanged.",
+  "constants": {
+    "CONTEXT_CHAR_LIMIT": 50000,
+    "KEEP_RECENT_RESULTS": 3,
+    "SUMMARY_INPUT_CHAR_LIMIT": 80000,
+    "KEEP_RECENT_MESSAGES": 5,
+    "TOOL_RESULT_BATCH_CHAR_LIMIT": 200000,
+    "LARGE_RESULT_CHAR_LIMIT": 30000
+  }
+}

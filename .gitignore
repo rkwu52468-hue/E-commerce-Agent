@@ -1,0 +1,47 @@
+# Local teaching instructions and conversation history
+AGENTS.md
+**/AGENTS.md
+
+# Runtime outputs; keep only the directory marker
+runtime/*
+!runtime/.gitkeep
+
+# Private customer state
+data/auth/
+data/memory/
+data/tasks/
+data/schedules/
+
+# Databases and logs
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+*.jsonl
+
+# Secrets and environment-specific configuration
+.env
+.env.*
+
+# Environments, caches and local tooling
+.venv/
+.venv-rag/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+.tmp/
+.vs/
+.vscode/
+
+# Build and operating-system output
+build/
+dist/
+*.egg-info/
+.DS_Store
+Thumbs.db

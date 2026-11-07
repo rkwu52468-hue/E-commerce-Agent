@@ -1,0 +1,4 @@
+# All modes use PyYAML for project skill metadata.
+# The live adapter additionally uses anthropic; versions match the existing course environment.
+anthropic==2.3.0
+PyYAML==6.0.3
