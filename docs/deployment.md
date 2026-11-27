@@ -42,11 +42,31 @@ docker compose up -d --build
 
 ---
 
-## 3. Hugging Face Spaces 免费公网部署（推荐简历附在线体验链接）
+## 3. 魔搭社区 ModelScope 创空间免费公网部署（已实测跑通，国内直连推荐）
+
+本项目已于 **2026-11-27** 在魔搭社区创空间（免费 CPU 规格 `2vCPU / 8GB 内存` + Docker 框架）完成真实 Linux `amd64` 容器构建与公网部署：
+- 在线实例参考：https://modelscope.cn/studios/MamaoOvo/ecommerce-support-agent
+
+部署步骤：
+1. 登录 [魔搭社区创空间](https://modelscope.cn/studios)，点击 **「创建创空间」**，填写名称、公开权限与封面图。
+2. 通过 Git 将本仓库源码（保留魔搭初始 `.gitattributes` 与 `README.md` 卡片头）推送到创空间 `master` 分支。
+3. 在 **「部署设置」** 中配置：
+   - **应用部署框架**：`docker`
+   - **关联云资源**：`免费CPU，按需分配 / 2v CPU / 8G内存`
+   - **监听端口**：`7860`（与 `Dockerfile` 默认 `PORT=7860` 一致）
+   - **OAuth 设置**：`关闭`（允许访客免登录直接体验）
+   - **明文变量**（推荐成本与限流保护）：`DAILY_TOKEN_BUDGET=200000`、`RATE_LIMIT_RPM=20`
+   - **密文变量**：`DEEPSEEK_API_KEY`（填入则自动以 `live` 真实 DeepSeek 模式运行；不填则自动以零费用 `demo` 模式运行）
+4. 点击 **「确认并部署」**，构建机将自动完成依赖安装、下载 `BAAI/bge-small-zh-v1.5` 并预构建 22 篇 / 66 片段 Qdrant 索引，约 2–3 分钟即可上线。
+
+---
+
+## 4. Hugging Face Spaces（需 PRO 订阅 Docker 算力）
+
+> 注：经 2026-11-27 实测确认，Hugging Face Spaces 免费账号目前仅支持 Static 静态空间，Gradio 与 Docker Space 均需订阅 PRO 计划；零成本云端 Docker 部署推荐优先使用第 3 节的魔搭创空间。
 
 1. 在 [Hugging Face Spaces](https://huggingface.co/spaces) 新建 Space，SDK 选择 **Docker**（Blank）。
-2. 推送本仓库代码（或绑定 GitHub 仓库）。
-3. 在 Space 根目录的 `README.md` 顶部添加 Spaces Frontmatter（或直接在新建的 Space 仓库配置）：
+2. 推送本仓库代码并在 Space 根目录 `README.md` 顶部添加 Spaces Frontmatter（`sdk: docker`、`app_port: 7860`）：
    ```yaml
    ---
    title: E-Commerce AI Support Workbench
@@ -57,14 +77,11 @@ docker compose up -d --build
    app_port: 7860
    ---
    ```
-4. 在 Space **Settings → Variables and secrets** 中配置：
-   - **Secret**：`DEEPSEEK_API_KEY`（如不配置，站点会自动以 `demo` 模式运行，仍可完整体验页面、SQLite 取消确认与 Hybrid RAG）；
-   - **Variable**（推荐开启成本保护）：`DAILY_TOKEN_BUDGET=200000`、`RATE_LIMIT_RPM=20`。
-5. 构建完成后即可获得公网 HTTPS 体验链接，可直接贴入简历与 GitHub 仓库简介。
+3. 在 Space **Settings → Variables and secrets** 中配置 `DEEPSEEK_API_KEY`（Secret）与 `DAILY_TOKEN_BUDGET=200000`、`RATE_LIMIT_RPM=20`（Variables）。
 
 ---
 
-## 4. Google Cloud Run / Render / Fly.io
+## 5. Google Cloud Run / Render / Fly.io
 
 容器默认读取 `$PORT` 环境变量（未设置时默认 `7860`），可直接用于任意无服务器容器平台：
 
@@ -83,7 +100,7 @@ gcloud run deploy ecommerce-support-agent \
 
 ---
 
-## 5. 上线前安全与成本自检清单
+## 6. 上线前安全与成本自检清单
 
 - **密钥隔离**：API Key 仅通过平台 Secrets / 环境变量注入，`.dockerignore` 与 `.gitignore` 均已屏蔽 `.env`、`data/auth/` 与 `*.db`。
 - **成本熔断**：务必按需设置 `DAILY_TOKEN_BUDGET`（默认 `500000` tokens/天）与 `RATE_LIMIT_RPM`（默认 `30` 次/分钟/会话），配合静态 `system` Prompt 保持 ~90%+ Prompt Cache 命中率。

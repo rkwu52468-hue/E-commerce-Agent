@@ -161,11 +161,14 @@ Dense 证据事实覆盖 **19/20 (95.0%)**（`E046` 漏检“照片不能自动�
   - `node --check web/app.js` 语法检查通过；
   - 缓存稳定性加固：在 `SafeguardConfig.production_defaults` 开启 `cache_safe_system=True`（将动态 `<current_todos>` 移出 `system` Prompt 改为最新用户消息尾部 append-only 注入，消除 `todo_write` 导致的 KV 前缀击穿），并在 Web 工作台默认关闭冗余 `task` 子 Agent 委派（`enable_subagents=False`）；实测「延误核实 + 人工升级」单轮命中率由 **50.7% → 89.12%**（未命中输入 **22,394 → 2,047，-90.9%**，输出 **-73.8%**）。
 
-### 6. 阶段 4：容器化与云部署配置验收（2026-11-27）
+### 6. 阶段 4：容器化与真实云端 Docker 部署验收（2026-11-27）
 
-- 新增 [Dockerfile](../Dockerfile)（`python:3.12-slim`、非 root `appuser`、镜像构建期预建本地 Qdrant 索引、暴露 `7860` 并内置 `/api/health` 健康检查）、[.dockerignore](../.dockerignore)、[docker-compose.yml](../docker-compose.yml)、[.env.example](../.env.example) 与 [docs/deployment.md](deployment.md)。
+- 新增 [Dockerfile](../Dockerfile)（`python:3.12-slim`、非 root `appuser`、镜像构建期校验 `import web_server` 并预建本地 Qdrant 索引、暴露 `7860` 并内置 `/api/health` 健康检查）、[.dockerignore](../.dockerignore)、[docker-compose.yml](../docker-compose.yml)、[.env.example](../.env.example) 与 [docs/deployment.md](deployment.md)。
 - 升级 [web_server.py](../web_server.py) 支持云端环境变量解析（`APP_MODE=auto|live|demo`、`HOST`、`PORT`、`RETRIEVAL_MODE`、`RATE_LIMIT_RPM`、`DAILY_TOKEN_BUDGET`、`STRICT_AUTH`、`AUTO_BUILD_INDEX`），无 Key 时 `auto` 模式自动降级零 API `demo` 模式启动，避免公网容器冷启动崩溃。
-- 已完成 `docker-compose.yml` YAML 校验、部署环境变量配置单测（`Stage4DeploymentConfigTests` 2/2 通过）与全量回归（**519/519 通过**，耗时 40.876 秒）；当前本机未安装 Docker 守护进程，实际 `docker build` 需在已安装 Docker 的环境或云端平台（Hugging Face Spaces / Cloud Run / ECS）执行。
+- **真实云端 Linux `amd64` 容器构建与上线实测（魔搭社区 ModelScope 创空间，免费 `2vCPU / 8GB` Docker）**：
+  - 首次云端实测日志暴露 `Dockerfile` 漏拷贝 `vendor/` 目录（`ModuleNotFoundError: No module named 'vendor'`），已补齐 `COPY vendor ./vendor`、构建期 `import web_server` 冒烟校验与 `/app/runtime` 可写权限，并补充回归单测；
+  - 二次部署在真实 Linux `amd64` 镜像构建机上完成全部依赖安装（27.8 秒）、`BAAI/bge-small-zh-v1.5` 下载与 22 篇 / 66 片段本地 Qdrant 索引预构建（13.0 秒），公网容器正常启动并可访问：https://modelscope.cn/studios/MamaoOvo/ecommerce-support-agent ；
+  - 本地自动化检查：`docker-compose.yml` YAML 校验、部署环境变量与容器规范单测（`Stage4DeploymentConfigTests` 2/2 通过）与全量回归（**519/519 通过**，耗时 40.876 秒）。
 
 ## 本地复现
 

@@ -2,9 +2,11 @@
 
 一个**行动型、可审计、可容器化部署**的电商智能售后 Agent 系统：在真实 SQLite 事务读写、两步高危确认门控、Hybrid Search（Qdrant 向量 + Okapi BM25 RRF 融合）、四大生产护栏与静态 KV 前缀缓存优化的基础上，提供 FastAPI + SSE 实时 Web 工作台与 100 题端到端真模型评测体系。
 
-**FastAPI + SSE Web 工作台 & CLI 双入口 · 真实 SQLite 事务读写 · 真实 DeepSeek 100 题实测 · Docker / HF Spaces 一键部署**
+**FastAPI + SSE Web 工作台 & CLI 双入口 · 真实 SQLite 事务读写 · 真实 DeepSeek 100 题实测 · Docker / 魔搭创空间已上线**
 
-> 工程诚实口径：全部订单、商品、退款与知识库资料均为本地模拟数据，不代表真实商家生产上线指标。下文所有自动化测试项数、本地检索指标、缓存优化对比与真实 DeepSeek 100 题评测结果均严格分栏记录，详见 [docs/verification.md](docs/verification.md)。
+- **公网在线体验（魔搭创空间 Docker 实测部署）**：https://modelscope.cn/studios/MamaoOvo/ecommerce-support-agent
+
+> 工程诚实口径：全部订单、商品、退款与知识库资料均为本地模拟数据，不代表真实商家生产上线指标。下文所有自动化测试项数、本地检索指标、缓存优化对比、真实 DeepSeek 100 题评测与云端 Docker 部署记录均严格分栏记录，详见 [docs/verification.md](docs/verification.md)。
 
 ---
 
@@ -87,7 +89,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-同样支持 **Hugging Face Spaces（Docker SDK，端口 7860）** 与 **Google Cloud Run / Render / ECS**，完整步骤见 [docs/deployment.md](docs/deployment.md)。
+同样支持 **魔搭社区 ModelScope 创空间（免费 Docker 2vCPU / 8GB，已实测部署）**、**Render / Google Cloud Run / ECS** 与 **Hugging Face Spaces（PRO Docker SDK，端口 7860）**，完整步骤见 [docs/deployment.md](docs/deployment.md)。
 
 ### 4. CLI 命令行模式与离线演示
 
