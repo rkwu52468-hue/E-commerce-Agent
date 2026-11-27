@@ -26,18 +26,21 @@ RUN pip install --upgrade pip \
     && pip install -r requirements-web.txt \
     && if [ "$INSTALL_RAG" = "true" ]; then pip install -r requirements-rag.txt; fi
 
-# Copy application source, static Web UI, skills, and synthetic seed datasets
+# Copy application source, static Web UI, vendored helpers, skills, and synthetic seed datasets
 COPY app.py web_server.py config.json ./
 COPY customer_service ./customer_service
+COPY vendor ./vendor
 COPY web ./web
 COPY data ./data
 COPY skills ./skills
 COPY runtime/.gitkeep ./runtime/.gitkeep
 
-# Pre-build local Qdrant + FastEmbed Chinese embedding index at image build time when RAG is enabled
+# Pre-build local Qdrant + FastEmbed Chinese embedding index and verify web_server imports at build time
 RUN mkdir -p /app/.cache/fastembed /app/runtime \
+    && python -c "import web_server; print('web_server import OK')" \
     && if [ "$INSTALL_RAG" = "true" ]; then python -m customer_service.knowledge_cli build; fi \
-    && chown -R appuser:appuser /app
+    && chown -R appuser:appuser /app \
+    && chmod -R a+rwX /app/runtime /app/.cache/fastembed
 
 USER appuser
 

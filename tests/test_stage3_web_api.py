@@ -295,6 +295,8 @@ class Stage4DeploymentConfigTests(unittest.TestCase):
         gitignore = (ROOT / '.gitignore').read_text(encoding='utf-8')
         deploy_doc = (ROOT / 'docs/deployment.md').read_text(encoding='utf-8')
 
+        self.assertIn('COPY vendor ./vendor', dockerfile)
+        self.assertIn('import web_server', dockerfile)
         self.assertIn('USER appuser', dockerfile)
         self.assertIn('/api/health', dockerfile)
         self.assertIn('EXPOSE 7860', dockerfile)
