@@ -1,0 +1,387 @@
+{
+  "dataset_version": "action-sqlite-2026-11-26",
+  "simulated": true,
+  "customers": [
+    "alice",
+    "bob",
+    "charlie"
+  ],
+  "products": {
+    "P100": {
+      "product_id": "P100",
+      "name": "示例保温杯",
+      "price_cents": 19900,
+      "currency": "CNY",
+      "capacity_ml": 500,
+      "source": "shop-action-seed.json#products.P100"
+    },
+    "P101": {
+      "product_id": "P101",
+      "name": "轻量化便携咖啡杯",
+      "price_cents": 12900,
+      "currency": "CNY",
+      "capacity_ml": 350,
+      "source": "shop-action-seed.json#products.P101"
+    },
+    "P102": {
+      "product_id": "P102",
+      "name": "不锈钢双层泡茶壶",
+      "price_cents": 25900,
+      "currency": "CNY",
+      "capacity_ml": 800,
+      "source": "shop-action-seed.json#products.P102"
+    },
+    "P103": {
+      "product_id": "P103",
+      "name": "食品级硅胶替换杯盖配件",
+      "price_cents": 2900,
+      "currency": "CNY",
+      "capacity_ml": 500,
+      "source": "shop-action-seed.json#products.P103"
+    },
+    "P104": {
+      "product_id": "P104",
+      "name": "智能显温真空焖烧罐",
+      "price_cents": 22900,
+      "currency": "CNY",
+      "capacity_ml": 600,
+      "source": "shop-action-seed.json#products.P104"
+    },
+    "P105": {
+      "product_id": "P105",
+      "name": "车载磁吸吸管运动水杯",
+      "price_cents": 15900,
+      "currency": "CNY",
+      "capacity_ml": 750,
+      "source": "shop-action-seed.json#products.P105"
+    }
+  },
+  "policies": {
+    "returns": {
+      "policy_id": "returns",
+      "version": "action-2026-11-26",
+      "title": "模拟店铺退换货政策",
+      "text": "本示例店铺允许收货后7天内提交未使用商品的退货申请；需保留原包装及配件，拆封影响二次销售或超过7天的申请需创建工单由人工审核。此规则为模拟数据。",
+      "source": "shop-action-seed.json#policies.returns"
+    },
+    "cancellation": {
+      "policy_id": "cancellation",
+      "version": "action-2026-11-26",
+      "title": "模拟店铺订单取消规则",
+      "text": "仅待支付（pending_payment）与已付款未发货（paid_unshipped）状态的订单支持直接取消，且取消前必须由客户二次确认；已付款未发货订单取消后自动创建原路退款单。已发货（shipped）及已签收（delivered）订单不支持直接取消，需走退货退款或人工工单。",
+      "source": "shop-action-seed.json#policies.cancellation"
+    },
+    "refund_timeline": {
+      "policy_id": "refund_timeline",
+      "version": "action-2026-11-26",
+      "title": "模拟店铺退款时效说明",
+      "text": "未发货订单取消后退款单自动审核通过，预计1-3个工作日原路退回；已签收退货退款需仓库质检与审核（约1-2个工作日），审核通过后1-3个工作日到账；若退款被拒绝且客户有异议，可创建人工升级工单复核。",
+      "source": "shop-action-seed.json#policies.refund_timeline"
+    },
+    "escalation": {
+      "policy_id": "escalation",
+      "version": "action-2026-11-26",
+      "title": "模拟店铺人工升级标准",
+      "text": "以下情形应创建工单并标记人工升级：物流严重延误需赔付协商、退款审核被拒申诉、超过7天售后争议、工具持续异常无法自助查询、或客户明确要求转接人工客服。",
+      "source": "shop-action-seed.json#policies.escalation"
+    }
+  },
+  "orders": {
+    "A1001": {
+      "order_id": "A1001",
+      "customer_id": "alice",
+      "product_id": "P100",
+      "quantity": 1,
+      "total_cents": 16900,
+      "currency": "CNY",
+      "status": "shipped",
+      "source": "shop-action-seed.json#orders.A1001",
+      "tracking": {
+        "tracking_id": "DEMO-A1001",
+        "status": "delayed",
+        "events": [
+          {
+            "time": "2026-11-20T09:00:00+08:00",
+            "status": "picked_up",
+            "detail": "模拟物流：已揽收"
+          },
+          {
+            "time": "2026-11-21T16:00:00+08:00",
+            "status": "in_transit",
+            "detail": "模拟物流：已到达收件区域"
+          },
+          {
+            "time": "2026-11-23T10:00:00+08:00",
+            "status": "DELIVERY_DELAY",
+            "detail": "模拟物流：配送网点积压，等待后续更新；暂无可承诺的送达时间"
+          }
+        ]
+      }
+    },
+    "A1002": {
+      "order_id": "A1002",
+      "customer_id": "alice",
+      "product_id": "P101",
+      "quantity": 2,
+      "total_cents": 25800,
+      "currency": "CNY",
+      "status": "pending_payment",
+      "source": "shop-action-seed.json#orders.A1002"
+    },
+    "A1003": {
+      "order_id": "A1003",
+      "customer_id": "alice",
+      "product_id": "P104",
+      "quantity": 1,
+      "total_cents": 22900,
+      "currency": "CNY",
+      "status": "paid_unshipped",
+      "source": "shop-action-seed.json#orders.A1003"
+    },
+    "A1004": {
+      "order_id": "A1004",
+      "customer_id": "alice",
+      "product_id": "P102",
+      "quantity": 1,
+      "total_cents": 25900,
+      "currency": "CNY",
+      "status": "delivered",
+      "source": "shop-action-seed.json#orders.A1004",
+      "tracking": {
+        "tracking_id": "DEMO-A1004",
+        "status": "delivered",
+        "events": [
+          {
+            "time": "2026-11-18T11:20:00+08:00",
+            "status": "picked_up",
+            "detail": "模拟物流：已揽收"
+          },
+          {
+            "time": "2026-11-19T15:40:00+08:00",
+            "status": "delivered",
+            "detail": "模拟物流：本人已签收"
+          }
+        ]
+      }
+    },
+    "A1005": {
+      "order_id": "A1005",
+      "customer_id": "alice",
+      "product_id": "P103",
+      "quantity": 2,
+      "total_cents": 5800,
+      "currency": "CNY",
+      "status": "cancelled",
+      "source": "shop-action-seed.json#orders.A1005"
+    },
+    "A1006": {
+      "order_id": "A1006",
+      "customer_id": "alice",
+      "product_id": "P105",
+      "quantity": 1,
+      "total_cents": 15900,
+      "currency": "CNY",
+      "status": "delivered",
+      "source": "shop-action-seed.json#orders.A1006",
+      "tracking": {
+        "tracking_id": "DEMO-A1006",
+        "status": "delivered",
+        "events": [
+          {
+            "time": "2026-11-05T08:30:00+08:00",
+            "status": "picked_up",
+            "detail": "模拟物流：已揽收"
+          },
+          {
+            "time": "2026-11-07T14:15:00+08:00",
+            "status": "delivered",
+            "detail": "模拟物流：驿站代收完成"
+          }
+        ]
+      }
+    },
+    "B2001": {
+      "order_id": "B2001",
+      "customer_id": "bob",
+      "product_id": "P100",
+      "quantity": 2,
+      "total_cents": 33800,
+      "currency": "CNY",
+      "status": "delivered",
+      "source": "shop-action-seed.json#orders.B2001",
+      "tracking": {
+        "tracking_id": "DEMO-B2001",
+        "status": "delivered",
+        "events": [
+          {
+            "time": "2026-11-02T14:00:00+08:00",
+            "status": "delivered",
+            "detail": "模拟物流：已签收"
+          }
+        ]
+      }
+    },
+    "B2002": {
+      "order_id": "B2002",
+      "customer_id": "bob",
+      "product_id": "P102",
+      "quantity": 1,
+      "total_cents": 25900,
+      "currency": "CNY",
+      "status": "paid_unshipped",
+      "source": "shop-action-seed.json#orders.B2002"
+    },
+    "B2003": {
+      "order_id": "B2003",
+      "customer_id": "bob",
+      "product_id": "P104",
+      "quantity": 1,
+      "total_cents": 22900,
+      "currency": "CNY",
+      "status": "shipped",
+      "source": "shop-action-seed.json#orders.B2003",
+      "tracking": {
+        "tracking_id": "DEMO-B2003",
+        "status": "in_transit",
+        "events": [
+          {
+            "time": "2026-11-24T10:10:00+08:00",
+            "status": "picked_up",
+            "detail": "模拟物流：已揽收"
+          },
+          {
+            "time": "2026-11-25T19:00:00+08:00",
+            "status": "in_transit",
+            "detail": "模拟物流：发往上海分拨中心"
+          }
+        ]
+      }
+    },
+    "B2004": {
+      "order_id": "B2004",
+      "customer_id": "bob",
+      "product_id": "P101",
+      "quantity": 1,
+      "total_cents": 12900,
+      "currency": "CNY",
+      "status": "refund_rejected",
+      "source": "shop-action-seed.json#orders.B2004",
+      "tracking": {
+        "tracking_id": "DEMO-B2004",
+        "status": "delivered",
+        "events": [
+          {
+            "time": "2026-11-12T17:20:00+08:00",
+            "status": "delivered",
+            "detail": "模拟物流：已签收"
+          }
+        ]
+      }
+    },
+    "C3001": {
+      "order_id": "C3001",
+      "customer_id": "charlie",
+      "product_id": "P105",
+      "quantity": 1,
+      "total_cents": 15900,
+      "currency": "CNY",
+      "status": "pending_payment",
+      "source": "shop-action-seed.json#orders.C3001"
+    },
+    "C3002": {
+      "order_id": "C3002",
+      "customer_id": "charlie",
+      "product_id": "P100",
+      "quantity": 1,
+      "total_cents": 19900,
+      "currency": "CNY",
+      "status": "delivered",
+      "source": "shop-action-seed.json#orders.C3002",
+      "tracking": {
+        "tracking_id": "DEMO-C3002",
+        "status": "delivered",
+        "events": [
+          {
+            "time": "2026-11-21T13:05:00+08:00",
+            "status": "delivered",
+            "detail": "模拟物流：已签收"
+          }
+        ]
+      }
+    }
+  },
+  "order_cancellations": {
+    "A1005": {
+      "order_id": "A1005",
+      "customer_id": "alice",
+      "previous_status": "paid_unshipped",
+      "reason": "客户拍错配件规格",
+      "cancelled_at": "2026-11-15T10:12:00+08:00",
+      "confirmation_id": "cfm_seed_a1005"
+    }
+  },
+  "refunds": {
+    "RF-A1004": {
+      "refund_id": "RF-A1004",
+      "order_id": "A1004",
+      "customer_id": "alice",
+      "amount_cents": 25900,
+      "currency": "CNY",
+      "status": "under_review",
+      "reason": "茶壶容量偏大申请7天无理由退货",
+      "updated_at": "2026-11-24T16:30:00+08:00",
+      "estimated_arrival": "审核通过后预计1-3个工作日原路退回",
+      "reviewer_note": "仓库已签收退回包裹，质检审核中"
+    },
+    "RF-A1005": {
+      "refund_id": "RF-A1005",
+      "order_id": "A1005",
+      "customer_id": "alice",
+      "amount_cents": 5800,
+      "currency": "CNY",
+      "status": "refunded",
+      "reason": "未发货订单取消自动退款",
+      "updated_at": "2026-11-16T09:15:00+08:00",
+      "estimated_arrival": "已原路退回至原支付账户",
+      "reviewer_note": "自动审核通过并完成原路打款"
+    },
+    "RF-B2004": {
+      "refund_id": "RF-B2004",
+      "order_id": "B2004",
+      "customer_id": "bob",
+      "amount_cents": 12900,
+      "currency": "CNY",
+      "status": "rejected",
+      "reason": "使用后申请无理由退货",
+      "updated_at": "2026-11-18T11:45:00+08:00",
+      "estimated_arrival": "无（退款申请未通过）",
+      "reviewer_note": "商品存在明显使用痕迹且缺少原包装，不符合7天无理由条件"
+    },
+    "RF-C3002": {
+      "refund_id": "RF-C3002",
+      "order_id": "C3002",
+      "customer_id": "charlie",
+      "amount_cents": 19900,
+      "currency": "CNY",
+      "status": "approved_pending_payout",
+      "reason": "杯身漆面轻微瑕疵退货",
+      "updated_at": "2026-11-25T14:20:00+08:00",
+      "estimated_arrival": "预计1-3个工作日原路退回",
+      "reviewer_note": "质检核实属实，已进入打款队列"
+    }
+  },
+  "tickets": {
+    "TK-20261120-001": {
+      "ticket_id": "TK-20261120-001",
+      "customer_id": "alice",
+      "order_id": "A1004",
+      "category": "order_change",
+      "priority": "normal",
+      "status": "resolved",
+      "escalate_to_human": false,
+      "assigned_queue": "after_sales_support",
+      "summary": "咨询退货寄回地址与运费说明",
+      "created_at": "2026-11-20T10:05:00+08:00"
+    }
+  }
+}

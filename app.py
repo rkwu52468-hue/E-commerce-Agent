@@ -29,6 +29,8 @@ from customer_service.team_trial import run_team_trial
 from customer_service.memory import MemoryExtractor, MemorySelector, MemoryStoreError
 from customer_service.storage import SQLiteStore, initialize_database
 from customer_service.sqlite_demo import run_sqlite_demo
+from customer_service.actions_demo import run_actions_demo
+from customer_service.safeguards import SafeguardConfig
 from customer_service.task_system import TaskStoreError
 
 ROOT = Path(__file__).resolve().parent
@@ -45,7 +47,9 @@ def _main(resources):
     modes.add_argument('--demo', action='store_true', help='Offline scripted business demo')
     modes.add_argument('--init-auth', action='store_true', help='Provision a local simulated account password without API calls; requires --customer')
     modes.add_argument('--init-db', action='store_true', help='Initialize the persistent SQLite shop without API calls; never overwrite an existing database')
+    modes.add_argument('--init-action-db', action='store_true', help='Initialize the expanded action-capable SQLite shop (data/shop-actions.db) without API calls')
     modes.add_argument('--demo-sqlite', action='store_true', help='Offline scripted flow using a real isolated SQLite database')
+    modes.add_argument('--demo-actions', action='store_true', help='Offline scripted Stage 1 showcase: action tools, 2-step confirmation, and production safeguards')
     modes.add_argument('--lesson', choices=['s04-hooks', 's05-todo', 's06-subagent', 's08', 's08-micro', 's08-fit', 's08-summary', 's08-compact', 's08-reactive', 's08-budget'], help='Offline course lessons using synthetic shop data')
     modes.add_argument('--live', action='store_true', help='Explicit interactive model API session')
     modes.add_argument('--live-micro', action='store_true', help='Controlled two-request real-model micro trial')
@@ -53,6 +57,10 @@ def _main(resources):
     modes.add_argument('--live-context', action='store_true', help='Default-50000 local micro+fit with a maximum of two real retrieval requests; no summary')
     modes.add_argument('--live-background-plan', action='store_true', help='Controlled two-request program-assisted query-plan experiment; synthetic Alice fixture, no login credentials, no auxiliary model calls')
     parser.add_argument('--allow-knowledge', action='store_true', help='With --live, enable local public Chinese vector knowledge search; build the index first using run-rag.cmd build; off by default')
+    parser.add_argument('--retrieval-mode', choices=['dense', 'hybrid'], default=None, help='With --live --allow-knowledge, select dense or hybrid (Dense+BM25 RRF) retrieval; defaults to hybrid when --allow-actions is set, else dense')
+    parser.add_argument('--allow-actions', action='store_true', help='With --live, enable action tools (cancel_order with 2-step confirmation, check_refund_status, create_support_ticket, list_my_tickets) and production safeguards; off by default')
+    parser.add_argument('--tool-timeout', type=float, default=None, help='With --live --allow-actions, single tool execution timeout in seconds (default: 10)')
+    parser.add_argument('--daily-token-budget', type=int, default=None, help='With --live --allow-actions, persistent daily token budget cap (default: 500000)')
     parser.add_argument('--allow-summary', action='store_true', help='With --live, automatic/explicit/context recovery share one summary attempt (max_tokens=2000, SDK retries=0); context overflow may retry the main request once')
     parser.add_argument('--allow-memory', action='store_true', help='With --live, enable user/feedback/project/reference memories, at most one recall (200 output tokens) and one extraction (600) request per authenticated input; off by default')
     parser.add_argument('--allow-tasks', action='store_true', help='With --live, enable authenticated per-customer persistent investigation tasks; no extra auxiliary API calls; off by default')
@@ -62,16 +70,24 @@ def _main(resources):
     parser.add_argument('--background-delay-seconds', type=float, default=None, help='With --allow-background, explicitly simulate 0 to 10 seconds of background latency; default 0')
     parser.add_argument('--dry-run', action='store_true', help='Preview --live-micro, --live-summary, --live-context or --live-background-plan without API calls')
     parser.add_argument('--store', choices=['sqlite', 'json'], help='With --live, select shop storage (default: sqlite)')
-    parser.add_argument('--customer', choices=['alice', 'bob'], default=None, help='Fixture identity or explicit --init-auth target; never a --live login shortcut')
+    parser.add_argument('--customer', choices=['alice', 'bob', 'charlie'], default=None, help='Fixture identity or explicit --init-auth target; never a --live login shortcut')
     args = parser.parse_args()
     if args.live and args.customer is not None:
         parser.error('--live starts as a guest; use local /login instead of --customer.')
     if args.init_auth and args.customer is None:
-        parser.error('--init-auth requires an explicit --customer alice or bob.')
+        parser.error('--init-auth requires an explicit --customer alice, bob or charlie.')
     if args.store is not None and not args.live:
         parser.error('--store only applies to --live.')
     if args.allow_knowledge and not args.live:
         parser.error('--allow-knowledge requires --live.')
+    if args.retrieval_mode is not None and not args.allow_knowledge:
+        parser.error('--retrieval-mode requires --live --allow-knowledge.')
+    if args.allow_actions and not args.live:
+        parser.error('--allow-actions requires --live.')
+    if args.tool_timeout is not None and (not args.allow_actions or not math.isfinite(args.tool_timeout) or not 0 < args.tool_timeout <= 60):
+        parser.error('--tool-timeout requires --live --allow-actions and a value in (0, 60].')
+    if args.daily_token_budget is not None and (not args.allow_actions or args.daily_token_budget <= 0):
+        parser.error('--daily-token-budget requires --live --allow-actions and a positive integer.')
     if args.allow_summary and not args.live:
         parser.error('--allow-summary requires --live.')
     if args.allow_memory and not args.live:
@@ -112,8 +128,13 @@ def _main(resources):
         parser.error('--dry-run requires --live-micro, --live-summary, --live-context or --live-background-plan.')
     if args.init_auth:
         try:
-            initialize_database(ROOT / 'data/shop.db', ROOT / 'data/shop-sqlite-seed.json')
-            if not SQLiteStore(ROOT / 'data/shop.db').has_customer(args.customer):
+            if args.customer == 'charlie':
+                initialize_database(ROOT / 'data/shop-actions.db', ROOT / 'data/shop-action-seed.json')
+                known_customer = SQLiteStore(ROOT / 'data/shop-actions.db').has_customer(args.customer)
+            else:
+                initialize_database(ROOT / 'data/shop.db', ROOT / 'data/shop-sqlite-seed.json')
+                known_customer = SQLiteStore(ROOT / 'data/shop.db').has_customer(args.customer)
+            if not known_customer:
                 parser.error('业务资料中没有此模拟账号，未读取密码。')
         except (OSError, ValueError, sqlite3.Error) as error:
             parser.error('模拟账号业务资料检查失败（' + type(error).__name__ + '）；未读取密码或调用API。')
@@ -143,11 +164,26 @@ def _main(resources):
         print('数据库：' + str(info['database_path']))
         print('全部业务数据为模拟；API调用数为0。')
         return
+    if args.init_action_db:
+        try:
+            info = initialize_database(ROOT / 'data/shop-actions.db', ROOT / 'data/shop-action-seed.json')
+        except (OSError, ValueError, sqlite3.Error) as error:
+            parser.error('行动型数据库初始化失败（' + type(error).__name__ + '）；未读取密钥或调用API，也未自动覆盖数据库。')
+        print('SQLite行动型商店初始化：' + ('新建' if info['created'] else '已存在，保留原数据'))
+        print('数据库：' + str(info['database_path']))
+        print('数据集版本：' + str(info['dataset_version']) + '；全部业务数据为模拟；API调用数为0。')
+        return
     if args.demo_sqlite:
         if (args.customer or 'alice') != 'alice':
             parser.error('固定离线场景仅使用alice；普通--live通过本地/login验证身份。')
         print('全部为模拟数据；真实SQLite引擎与离线脚本演示，API调用数为0。')
         run_sqlite_demo(ROOT)
+        return
+    if args.demo_actions:
+        if (args.customer or 'alice') != 'alice':
+            parser.error('固定离线场景仅使用alice；普通--live通过本地/login验证身份。')
+        print('全部为模拟数据；阶段1行动型客服（SQLite读写 + 二次确认 + 四大护栏）离线演示，API调用数为0。')
+        run_actions_demo(ROOT)
         return
     if not args.live:
         print('全部为模拟数据；离线脚本演示，API调用数为0。')
@@ -157,8 +193,16 @@ def _main(resources):
         return
     # Validate persistent business storage before asking for credentials or creating an SDK client.
     store = args.store or 'sqlite'
+    action_seed = ROOT / 'data/shop-action-seed.json'
+    action_db = ROOT / 'data/shop-actions.db'
     try:
-        if store == 'sqlite':
+        if args.allow_actions:
+            if store == 'sqlite':
+                initialize_database(action_db, action_seed)
+                Shop(None, action_seed, database_path=action_db, allow_actions=True)
+            else:
+                Shop(None, action_seed, allow_actions=True)
+        elif store == 'sqlite':
             initialize_database(ROOT / 'data/shop.db', ROOT / 'data/shop-sqlite-seed.json')
             Shop(None, ROOT / 'data/shop.json', database_path=ROOT / 'data/shop.db')
         else:
@@ -166,12 +210,15 @@ def _main(resources):
     except (OSError, ValueError, sqlite3.Error) as error:
         parser.error('商店存储检查失败（' + type(error).__name__ + '）；未读取密钥或调用API，请检查数据库，程序不会自动重建覆盖。')
     knowledge = None
+    retrieval_mode = None
     if args.allow_knowledge:
+        retrieval_mode = args.retrieval_mode or ('hybrid' if args.allow_actions else 'dense')
         try:
             from customer_service.knowledge import KnowledgeSearch
             knowledge = KnowledgeSearch(ROOT / 'data/knowledge_demo/documents.json',
                                         ROOT / 'runtime/knowledge_demo',
-                                        Path(os.environ.get('FASTEMBED_CACHE_PATH') or (ROOT / '.cache' / 'fastembed')))
+                                        Path(os.environ.get('FASTEMBED_CACHE_PATH') or (ROOT / '.cache' / 'fastembed')),
+                                        retrieval_mode=retrieval_mode)
             resources.callback(knowledge.close)
         except (ImportError, ValueError, RuntimeError, OSError) as error:
             parser.error('本地知识库未就绪：' + str(error) + '；尚未读取聊天密钥或请求聊天模型。请先运行run-rag.cmd build。')
@@ -190,18 +237,32 @@ def _main(resources):
     summary_client = SummaryClient(model.client, model.model, mode=model.mode) if args.allow_summary else None
     memory_selector = MemorySelector(model.client, model.model) if args.allow_memory else None
     memory_extractor = MemoryExtractor(model.client, model.model) if args.allow_memory else None
+    safeguards = (
+        SafeguardConfig.production_defaults(
+            budget_store_path=ROOT / 'runtime/token_budget.json',
+            daily_token_budget=args.daily_token_budget or 500000,
+            tool_timeout_seconds=args.tool_timeout or 10.0,
+        )
+        if args.allow_actions else None
+    )
     session = LiveSession(ROOT, model, store=store, summary_client=summary_client,
                           allow_memory=args.allow_memory, memory_selector=memory_selector,
                           memory_extractor=memory_extractor, allow_tasks=args.allow_tasks,
                           allow_background=args.allow_background,
                           background_delay_seconds=args.background_delay_seconds or 0.0,
-                          allow_schedules=args.allow_schedules, allow_teams=args.allow_teams, knowledge=knowledge)
+                          allow_schedules=args.allow_schedules, allow_teams=args.allow_teams,
+                          knowledge=knowledge, allow_actions=args.allow_actions,
+                          safeguards=safeguards)
     auth_store = AuthStore(ROOT / 'data/auth')
     print('真实模型交互；全部业务数据为模拟，默认以访客身份开始。')
     print('来源：' + config['base_url'] + '；模型：' + config['model'])
     print('商店存储：' + ('订单与商品使用SQLite；政策与物流使用JSON。' if store == 'sqlite' else '全部使用原JSON模拟数据。'))
     if knowledge is not None:
-        print('已启用公开模拟知识库：本地中文Embedding与Qdrant检索；相似片段仍须核实是否能支持结论，订单与物流沿用原业务工具。')
+        mode_desc = 'Hybrid Search (Qdrant 向量 + BM25 词法 RRF 融合)' if retrieval_mode == 'hybrid' else '本地中文Embedding与Qdrant向量检索'
+        print('已启用公开模拟知识库：' + mode_desc + '；相似片段仍须核实是否能支持结论，订单与物流沿用原业务工具。')
+    if args.allow_actions:
+        print('已启用阶段1行动型售后能力与生产护栏：支持取消未发货订单（两步二次确认）、查退款进度、建售后/人工升级工单、查工单列表；开启瞬态重试、工具超时、防死循环与Token预算熔断。')
+        print('行动型本地命令：/confirm <confirmation_id> 直接确认执行待办、/reject <confirmation_id> 拒绝、/tickets 查本人工单、/budget 查Token预算。')
     show_session(session)
     print('本地命令：/login 登录、/logout 退出登录、/help 帮助；输入q退出程序。')
     if args.allow_summary:
@@ -286,6 +347,34 @@ def _main(resources):
                         show_session(session)
                     elif command.split()[0] in ('/remember', '/memories', '/forget'):
                         show_memory_result(session.memory_command(command))
+                    elif command.split()[0] == '/confirm' and len(command.split()) == 2:
+                        result = session.approve_confirmation(command.split()[1], execute_now=True)
+                        if result['ok']:
+                            data = result['data']
+                            msg = '已确认并取消订单 ' + data['order']['order_id'] + '（原状态：' + data['previous_status'] + '）。'
+                            if data.get('refund_created'):
+                                msg += ' 已自动生成退款单 ' + data['refund_created']['refund_id'] + '。'
+                            print(msg)
+                        else:
+                            print('确认执行未完成（' + result['error']['code'] + '）：' + result['error']['message'])
+                    elif command.split()[0] == '/reject' and len(command.split()) == 2:
+                        result = session.reject_confirmation(command.split()[1])
+                        print('已拒绝待确认操作。' if result['ok'] else '取消待确认失败：' + result['error']['message'])
+                    elif command == '/tickets':
+                        result = session.list_tickets()
+                        if not result['ok']:
+                            print('工单查询未完成：' + result['error']['message'])
+                        else:
+                            tickets = result['data']['tickets']
+                            if not tickets:
+                                print('当前已登录账号暂无工单记录。')
+                            else:
+                                for tk in tickets:
+                                    print('  [' + tk['ticket_id'] + '] (' + tk['status'] + '/' + tk['priority'] + ') '
+                                          + tk['category'] + ' | 订单=' + str(tk.get('order_id') or '-') + ' | ' + tk['summary'])
+                    elif command == '/budget':
+                        status = session.budget_status()
+                        print('Token预算状态：' + (json.dumps(status, ensure_ascii=False) if status else '当前未启用预算护栏。'))
                     else:
                         print('未知本地命令或命令包含参数，未发送给模型。请输入/help查看用法。')
                     continue

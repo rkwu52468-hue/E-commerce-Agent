@@ -1,188 +1,156 @@
-# E-commerce Agent
+# E-commerce Support Agent (`desk.cs`)
 
-一个以电商客服为场景的 Python Agent 工程实践：通过工具查询模拟订单、商品和物流，检索本地中文知识库，并在可选的规划、子 Agent、记忆与任务机制支持下完成多轮咨询。
+一个**行动型、可审计、可容器化部署**的电商智能售后 Agent 系统：在真实 SQLite 事务读写、两步高危确认门控、Hybrid Search（Qdrant 向量 + Okapi BM25 RRF 融合）、四大生产护栏与静态 KV 前缀缓存优化的基础上，提供 FastAPI + SSE 实时 Web 工作台与 100 题端到端真模型评测体系。
 
-**本地 CLI 原型 · 全部业务资料为模拟数据 · 支持真实 DeepSeek 接入**
+**FastAPI + SSE Web 工作台 & CLI 双入口 · 真实 SQLite 事务读写 · 真实 DeepSeek 100 题实测 · Docker / HF Spaces 一键部署**
 
-项目参考 [Learn Claude Code](https://github.com/shareAI-lab/learn-claude-code) 的 Agent 基础机制，结合电商场景进行工程适配，使用 AI 辅助开发与调试。它用于学习和作品集展示；目前没有真实商家上线或生产业务指标。
+> 工程诚实口径：全部订单、商品、退款与知识库资料均为本地模拟数据，不代表真实商家生产上线指标。下文所有自动化测试项数、本地检索指标、缓存优化对比与真实 DeepSeek 100 题评测结果均严格分栏记录，详见 [docs/verification.md](docs/verification.md)。
 
-## 可以体验什么
+---
 
-- **自然语言选工具**：用户直接提问，主 Agent 根据需求调用受控工具，再根据实际结果回答。
-- **订单与商品事实查询**：SQLite 保存历史成交数据，JSON 提供政策和模拟物流；订单归属由程序校验。
-- **中文向量 RAG**：FastEmbed + Qdrant Local 检索公开资料，返回原文、来源、版本和片段 ID。
-- **有边界的协作**：当前回合 Todo、按需加载 Skill、隔离上下文的子 Agent，以及可选的持续队友。
-- **多轮接续**：可选的长期记忆、持久调查任务、后台物流查询、每日查询安排。
-- **过程可检查**：工具前后 Hooks、消息存盘、调用事件、上下文归档和受控原文查回。
+## 核心亮点与实测指标
 
-业务工具均为只读查询。项目尚未接入真实商家 API、退款执行或售后单创建，也没有 Web 前端。记忆与任务写入的是本地辅助状态。
+| 工程维度 | 实现方案 | 真实可复现实测结果（2026-11-26 ~ 27） |
+| --- | --- | --- |
+| **行动型业务闭环** | SQLite `BEGIN IMMEDIATE` 事务读写、订单取消状态机、高危写操作**两步二次确认门控**（禁止模型同回合自批）、自动原路退款单、人工升级工单与去重 | `action_execution` 20/20 (**100%**)；SQLite 终态准确率 **100/100**；离线行动演示 **15/15** |
+| **Hybrid Search RRF** | Qdrant Dense（`BAAI/bge-small-zh-v1.5`, Top-10）+ 归一化 Okapi BM25（CJK bigram + ASCII 编码词, Top-10）→ `RRF(k=60)` Top-3 + 一跳相邻补段（3000 字符上限） | Holdout Recall@3 **`0.8125 → 0.9375` (+12.5pp)**，MRR@3 **`0.7847 → 0.8958` (+11.1pp)**；24 题多段证据覆盖 **`75.69% → 86.11%`**（+2.18 ms） |
+| **Prompt Cache 极致优化** | 消除动态 `<pending_confirmations>` 与 `<current_todos>` 对 `system` Prompt 的 KV 前缀击穿，全部动态状态改为最新 `user` 消息尾部 append-only 注入 | Alice 4 轮实测缓存命中率 **`71.8% → 95.1%`**（未命中输入 **`-82.6%`**）；延误升级单轮 **`50.7% → 89.1%`**（未命中输入 **`-90.9%`**） |
+| **四大生产护栏** | 瞬态错误指数退避重试（429/5xx）、单工具超时隔离（`TOOL_TIMEOUT`）、防重复/连续失败死循环熔断、单轮/会话/跨重启每日 Token 预算熔断 + HTTP `429` 滑动窗口限流 | 100 题真模型评测中 3 道真实工具超时题 **3/3 自动转人工且 0 幻觉**；无误熔断 |
+| **100 题真模型 E2E 评测** | 5 大类 × 20 题（常规查询 / 行动执行 / RAG / 安全越权与注入 / 异常升级），支持 `--mode offline` 与真实 DeepSeek `--mode live` 断点续跑 | 严格自动评分：**工具 98.0%、DB 终态 100%、人工升级 100%/100%、严格解决率 95.0%**（5 题误判人工复核后 0 真实业务/幻觉错误）；整体缓存命中 **90.35%**，全量 100 题总费用 **≈ ¥0.62** |
+| **Web 工作台与观测** | FastAPI + SSE 实时流式推送（`tool_start/tool_end/delta/state`）、`exe.dev` 纸面手册 + 深色精密仪表 UI、可视化二次确认按钮、右侧实时订单/退款/工单看板、可选 Langfuse Hook | 全量 `unittest` **519/519 通过**（0 失败 / 错误 / 跳过）；真实 Uvicorn HTTP/SSE 探活通过 |
 
-## 一次查询怎样完成
+---
+
+## 系统架构
 
 ```mermaid
 flowchart TD
-    U["客户自然语言问题"] --> S["CLI / LiveSession：绑定身份与会话"]
-    S --> H["主客服 Harness + DeepSeek"]
-    H --> P["程序校验参数、权限、范围与预算"]
-    P --> B["业务工具：SQLite / JSON"]
-    P --> K["RAG：中文 Embedding + Qdrant Local"]
-    P --> C["按需规划、Skill、子 Agent 或已开启支路"]
-    B --> R["实际 tool_result 回填 messages"]
-    K --> R
-    C --> R
-    R --> H
-    H --> A["主客服组织答案：事实、引用与资料缺口"]
-    A --> D["保存消息与审计；按开关保存记忆和调查进度"]
-    D --> U
+    U["用户浏览器 Web 工作台 / CLI 终端"] --> API["FastAPI + SSE / CLI LiveSession<br/>多用户 SessionStore · 身份绑定 · 滑动窗口 429 限流"]
+    API --> H["主客服 Harness + DeepSeek API<br/>静态 system Prompt（KV 前缀缓存 90%~95%）"]
+    H --> G["四大生产护栏<br/>瞬态重试 · 工具超时 · 防死循环 · Token 预算熔断"]
+    G --> ACT["行动型工具 + 两步二次确认门控<br/>cancel_order · check_refund_status · create_support_ticket · list_my_tickets"]
+    G --> READ["只读业务工具<br/>get_product · get_policy · get_order · get_tracking · list_my_orders"]
+    G --> RAG["Hybrid Search RRF<br/>Qdrant Dense + Okapi BM25 -> RRF(k=60) + 相邻原文补段"]
+    ACT --> DB[("SQLite 事务库<br/>orders · order_cancellations · refunds · tickets")]
+    READ --> DB
+    H --> OBS["HookRegistry 元数据观测桥<br/>SSE 实时轨迹 · 本地 audit.jsonl · 可选 Langfuse 上报"]
+    OBS --> U
 ```
 
-模型提出工具请求，程序执行权限和参数检查；工具结果回填后，模型才能继续推理。主客服负责最终回答。简单问题不强制规划或委派，多个调用也不自动等于并行执行。
+深入阅读：[系统架构与模块导航](docs/architecture.md) · [RAG 设计与检索优化](docs/rag.md) · [完整实测验证报告](docs/verification.md) · [云端与 Docker 部署指南](docs/deployment.md)
 
-[完整功能链条与代码导航](docs/architecture.md) · [RAG 设计与漏召回优化](docs/rag.md) · [验证方法与结果边界](docs/verification.md)
+---
 
 ## 快速开始
 
-已验证环境：**Windows + Python 3.12**。以下先运行不需要聊天 API key 的离线示例。
+### 1. 安装依赖与构建本地 Hybrid RAG 索引
+
+已验证环境：**Windows 11 + Python 3.12**（Docker 镜像基于 `python:3.12-slim`）。
 
 ```powershell
 git clone https://github.com/rkwu52468-hue/E-commerce-Agent.git
 cd E-commerce-Agent
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python app.py --demo-sqlite
-```
 
-若 PowerShell 限制激活脚本，可直接用 `.\.venv\Scripts\python.exe` 替代命令中的 `python`。Linux/macOS 可使用 `source .venv/bin/activate`，但本项目尚未在这些系统验证。
+# 安装完整依赖（核心 + Hybrid RAG + FastAPI Web）
+python -m pip install -r requirements-rag.txt -r requirements-web.txt
 
-离线示例使用真实 SQLite 引擎和脚本模型，演示：
-
-- P100 商品当前标价 **199 元**。
-- Alice 的 A1001 历史订单实付 **169 元**。
-- 查询其他客户订单时被拒绝。
-
-脚本回答不代表真实大模型生成。无需为了演示创建本地登录密码。
-
-### 启用本地向量知识库
-
-在同一个虚拟环境中安装可选依赖：
-
-```powershell
-python -m pip install -r requirements-rag.txt
+# 构建本地 Qdrant + 中文向量索引（约 22 篇有效公开资料 / 66 片段，不调用聊天 API）
 python -m customer_service.knowledge_cli build
-python -m customer_service.knowledge_cli search "P100杯子能拿钢丝球刷吗？平时怎么洗，洗完怎么放？"
 ```
 
-首次构建会下载中文 Embedding 模型，需要网络和本地磁盘空间；检索在本机运行，不调用聊天模型。默认模型缓存位于项目 `.cache/fastembed`，可通过当前进程环境变量 `FASTEMBED_CACHE_PATH` 指定其他位置。生成的索引保存在 `runtime/knowledge_demo`，不上传仓库。
+> 首次构建会自动下载 `BAAI/bge-small-zh-v1.5`；可通过 `FASTEMBED_CACHE_PATH` 环境变量复用本机已有模型缓存。
 
-当前模拟语料包含 **27 条记录，其中 22 篇有效公开资料、66 个片段**；其余记录用于过期、未生效、他店或私有资料过滤检查。这里的“公开”指应用内可检索范围，所有记录本身均为合成测试资料。
-
-### 接入真实 DeepSeek
-
-`config.json` 保存模型名称和 Anthropic 兼容接口地址，不保存密钥。启动：
+### 2. 启动 Web 客服工作台（推荐首选体验）
 
 ```powershell
-python app.py --live --allow-knowledge
+# 方式 A：零 API 费用直接体验 UI、SSE 流式、SQLite 取消确认与 Hybrid RAG
+python web_server.py --mode demo --port 8000
+
+# 方式 B：接入真实 DeepSeek API（未设置环境变量时启动会隐藏提示输入 Key）
+$env:DEEPSEEK_API_KEY = "sk-你的密钥"
+python web_server.py --mode live --port 8000
 ```
 
-程序会隐藏提示输入 API key；也可从当前进程 `DEEPSEEK_API_KEY` 读取。不会自动加载 `.env`。真实模型请求会产生相应 API 用量，模型可用性以自己的账号为准。
+打开浏览器访问 **`http://127.0.0.1:8000`**：
+1. 访客状态体验公开商品问价、取消规则与 Hybrid RAG 清洗禁忌；
+2. 左侧一键切换 `alice` / `bob` / `charlie` 查看实时 SQLite 订单账本，验证跨客户访问 `B2001` 拦截；
+3. 点击「取消未发货的 A1003」，体验**可视化两步二次确认门控** → 点击确认后实时观测 `A1003` 变为 `cancelled` 并自动生成原路退款单 `RF-A1003`；
+4. 点击「A1001 延误核实 + 人工升级」，在右侧 `REFUND/TK`、`TRACE` 与底部 Prompt Cache 预算条中实时观察工单落库与缓存命中率。
 
-访客状态可直接测试公开知识问题：
+### 3. Docker / 云端一键部署
 
-> P100这款保温杯脏了，能拿钢丝球刷吗？平时应该怎么洗，洗完怎么放？
+```bash
+cp .env.example .env
+# 在 .env 中填入 DEEPSEEK_API_KEY（留空则自动以零成本 demo 模式运行）
+docker compose up -d --build
+```
 
-预期观察到 `get_product` / `search_knowledge` 等实际调用，并回答温水、少量中性洗涤剂、柔软杯刷、充分冲净、分开放置晾干等有原文依据的内容。具体调用顺序由模型决定。
+同样支持 **Hugging Face Spaces（Docker SDK，端口 7860）** 与 **Google Cloud Run / Render / ECS**，完整步骤见 [docs/deployment.md](docs/deployment.md)。
 
-### 测试登录后的订单 + RAG
-
-首次为本地模拟 Alice 账号设置密码：
+### 4. CLI 命令行模式与离线演示
 
 ```powershell
+# 零 API 行动型客服全套演示（15 项检查：状态机、两步确认、退款、工单、四大护栏）
+python app.py --demo-actions
+
+# 首次为 CLI 模拟账号配置本地密码（15-128 字符，密码不发给模型）
 python app.py --init-auth --customer alice
-python app.py --live --allow-knowledge
+
+# 启动真实 DeepSeek 行动型 + Hybrid RAG CLI 会话（支持 /login /confirm /reject /tickets /budget）
+python app.py --live --allow-actions --allow-knowledge
 ```
 
-按提示设置 **15–128 字符**的本地密码；进入会话后输入 `/login` 并按提示登录 Alice。密码验证由本地程序处理，凭据不进入模型。然后自然提问：
+---
 
-> 帮我查一下 A1001 实际付了多少钱，再告诉我这个订单里的保温杯应该怎么洗、能不能用钢丝球刷。
-
-应将 **订单实付 169 元**与**商品现价 199 元**分开说明，并引用检索到的清洗原文。工具未提供优惠、折扣、运费等明细时，金额差异的原因仍然未知。
-
-再测试资料缺口：
-
-> 假如收到杯子后拆开包装但没有使用，是不是一定能退？我只是在假设，并没有说已经收货。
-
-应说明现有申请条件和人工审核要求，明确“拆封是否影响资格”的缺口，并保留用户的假设语气。
-
-`/help` 查看本地命令，`/logout` 退出身份，`q` 或 `exit` 结束程序。登录会建立新上下文，不会自动加载旧聊天记录。
-
-## 能力开关
-
-| 能力 | 启动方式 / 条件 |
-| --- | --- |
-| 主循环、只读商店工具、Hooks、Todo、Skill、一次性子 Agent、基本上下文整理 | 普通 `--live` 默认具备；私人查询需登录 |
-| 中文知识库 | `--allow-knowledge`；先构建索引 |
-| 自动 / 主动 / 上下文溢出摘要 | `--allow-summary` |
-| 四类长期记忆 | `--allow-memory` + 登录 |
-| 持久调查任务 | `--allow-tasks` + 登录 |
-| 后台物流查询 | `--allow-background` + 登录 |
-| 每日物流查询安排 | `--allow-schedules` + 登录；CLI 需要保持运行 |
-| 持续物流 / 政策队友 | `--allow-teams` + 登录 |
-
-开关可以组合，登录本身不会开启可选能力。初次体验建议只开启 RAG，再分别验证其他机制。额外机制可能增加模型请求量。
-
-Windows 快捷入口：`run.cmd --demo-sqlite`、`run-rag.cmd build`、`run-rag.cmd live`。脚本使用本项目 `.venv` / `.venv-rag`；`run-rag.cmd live` 不接受附加开关，需要组合能力时使用 Python 直接启动。
-
-## RAG 的实现要点
-
-- 使用 `BAAI/bge-small-zh-v1.5` 生成 **512 维**向量，Qdrant 使用本地模式。
-- 最多返回 3 个向量主命中，余弦相似度阈值为 0.5。
-- 补充同文档、同版本且有效的相邻原文，最多 3 段；相邻段保留独立引用 ID，`score=null`。
-- 主命中和相邻段合并后的规范 JSON 证据限额为 **3000 字符**；这不是全部消息或精确 token 数。
-- 保存 source、version、chunk_id 和哈希；原文或模型指纹变化时要求重建索引。
-- 私人订单留在鉴权业务工具中，公开知识库不承载私人订单查询。
-
-首次真实清洗问答曾漏掉正向清洗方法，相邻原文补充后已在真实 DeepSeek 手动测试中召回。检索到资料仍需核对适用范围，模型最终回答的语义支持目前主要通过人工核验。
-
-## 验证
+## 复现评测与自动化测试
 
 ```powershell
-python -m pip install -r requirements-rag.txt
+# 1) 全量回归测试（519 项：身份、SQLite 事务、两步确认、四大护栏、Hybrid RAG、Web SSE/429/Langfuse、容器配置）
 python -m unittest discover -s tests -v
+
+# 2) Hybrid Search RRF vs Dense 真实本地检索对比（0 聊天 API）
 python -m customer_service.knowledge_cli evaluate
-python tools/evaluate_knowledge_context.py
+python tools/evaluate_knowledge_context.py --mode dense
+python tools/evaluate_knowledge_context.py --mode hybrid
+
+# 3) 100 题端到端 Agent 评测（先 0 API 管道校验，再按需跑真实 DeepSeek）
+python tools/evaluate_agent_e2e.py --mode offline --retrieval-mode hybrid
+python tools/evaluate_agent_e2e.py --mode live --retrieval-mode hybrid --limit 15
+# 全量 100 题（约 ¥0.62，支持 --resume 断点续跑）：
+python tools/evaluate_agent_e2e.py --mode live --retrieval-mode hybrid --daily-token-budget 3000000
 ```
 
-后两个命令需先构建索引，只运行本地检索评测。
+---
 
-发布副本于 **2026-11-07** 验证：**493 项离线自动化检查通过，0 失败、0 错误、0 跳过**；SQLite 离线演示、22 篇 / 66 片段索引构建及自然清洗检索均通过。使用已有 Python/RAG 环境和模型缓存，未验证全新安装或空缓存下载。
-
-24 个冻结片段问题中，补充相邻原文后的平均标注证据覆盖从 **75.69% 到 82.64%**，全部预期片段送达从 **14/24 到 17/24**；平均返回片段也从 **3 到 4.54**。这是小型模拟数据上的检索证据覆盖，**不是回答准确率、任务成功率或线上业务收益**。原始会话、密钥、客户状态与运行日志不随仓库发布。更多口径见[验证说明](docs/verification.md)。
-
-## 目录
+## 目录结构
 
 ```text
-app.py                         CLI、启动与功能开关
+app.py                         CLI 入口（只读/行动模式、本地 /login /confirm /budget 等开关）
+web_server.py                  FastAPI + SSE Web 服务入口（支持 CLI 参数与容器环境变量）
+Dockerfile / docker-compose.yml / .env.example   容器化与云端部署配置
+web/                           exe.dev 风格纸面手册 + 深色精密仪表 Web 工作台（HTML/CSS/JS）
 customer_service/
-  harness.py                   主 Agent 循环与工具分发
-  live_session.py / auth.py    会话和本地身份
-  shop.py / storage.py         只读业务查询与 SQLite
-  knowledge.py                 向量索引、检索和证据补充
-  context.py                   上下文整理与受控查回
-  subagent.py / teams.py       一次性子 Agent 与持续队友
-  memory.py / task_system.py   长期记忆和持久调查进度
-  background.py / scheduler.py 后台查询与每日安排
-skills/                        按需加载的调查指南
-data/                          合成业务数据和知识评测集
-tests/                         离线检查
-tools/                         检索证据评测工具
-vendor/                        保留来源与许可证的课程代码
-docs/                          架构、RAG 和验证说明
-runtime/                       本地生成状态（Git 忽略）
+  harness.py                   主 Agent 循环、静态 Prompt Cache 管理、工具分发与两步确认门控
+  shop.py / storage.py         业务工具与 SQLite 事务读写（orders / cancellations / refunds / tickets）
+  safeguards.py                四大生产护栏（瞬态重试、超时、防死循环、缓存感知 Token 预算熔断）
+  knowledge.py / knowledge_cli.py  Qdrant Dense + Okapi BM25 RRF 混合检索与一跳相邻原文补段
+  web_app.py / web_sessions.py FastAPI SSE 接口、多用户 SessionStore、滑动窗口限流、演示模型
+  observability.py             HookRegistry 元数据观测桥、SSE 实时事件流与可选 Langfuse 上报
+  live_session.py / auth.py    会话隔离与本地凭据验证
+  context.py / subagent.py / teams.py / memory.py / task_system.py / background.py / scheduler.py
+data/
+  shop-action-seed.json        扩展模拟商店种子（3 客户 / 6 SKU / 4 政策 / 12 多态订单 / 退款 / 工单）
+  knowledge_demo/              公开知识库语料与冻结检索评测集
+  eval_agent_100.json          5 大类 × 20 题端到端 Agent 评测集
+tools/                         Hybrid RAG 评测器、100 题 E2E 评测器、Prompt Cache 对比脚本
+tests/                         519 项自动化回归与验收测试
+docs/                          架构、RAG、实测验证口径与云部署指南
 ```
 
-`requirements-rag.lock.txt` 是已验证 Windows 环境的依赖快照，包含平台专用依赖；常规安装请使用 `requirements-rag.txt`。
+---
 
 ## 来源与许可
 
-课程来源为 [shareAI-lab/learn-claude-code](https://github.com/shareAI-lab/learn-claude-code)，参考固定提交 `7226f555d48900076eba126acf37c9ed5f002b5d`。项目保留了上游代码的 [MIT 许可证](vendor/LICENSE.learn-claude-code)和[来源记录](vendor/SOURCE.json)，具体见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。上游许可只覆盖相应上游内容；本仓库尚未为其余代码单独指定统一许可证。
+基础 Agent 循环教学原型参考 [shareAI-lab/learn-claude-code](https://github.com/shareAI-lab/learn-claude-code)（固定提交 `7226f555d48900076eba126acf37c9ed5f002b5d`），保留上游 [MIT 许可证](vendor/LICENSE.learn-claude-code)与[来源记录](vendor/SOURCE.json)，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Web 工作台前端视觉灵感参考 `exe.dev` 2026 纸面技术手册与深色仪器风格。

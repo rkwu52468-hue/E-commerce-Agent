@@ -140,7 +140,7 @@ class SubagentRunner:
             def __init__(child, shop, context, model):
                 super().__init__(shop, context, model, max_steps=MAX_SUBAGENT_STEPS,
                                  enable_subagents=False, skill_loader=skill_loader)
-                child.tools = copy.deepcopy([*shop.tool_definitions(), ARCHIVE_TOOL, OUTPUT_TOOL, child.skills.tool_definition()])
+                child.tools = copy.deepcopy([*shop.tool_definitions(include_actions=False), ARCHIVE_TOOL, OUTPUT_TOOL, child.skills.tool_definition()])
                 child.system = SUBAGENT_SYSTEM + child.skills.system_prompt()
 
             def call_tool(child, name, args):

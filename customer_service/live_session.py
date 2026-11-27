@@ -25,13 +25,18 @@ class LiveSession:
     MAX_LOGIN_FAILURES = 3
 
     def __init__(self, root, model, store='sqlite', summary_client=None,
-                 allow_memory=False, memory_selector=None, memory_extractor=None, allow_tasks=False, allow_background=False, background_delay_seconds=0.0, allow_schedules=False, schedule_clock=None, allow_teams=False, knowledge=None):
+                 allow_memory=False, memory_selector=None, memory_extractor=None, allow_tasks=False, allow_background=False, background_delay_seconds=0.0, allow_schedules=False, schedule_clock=None, allow_teams=False, knowledge=None, allow_actions=False, safeguards=None, data_path=None, database_path=None, enable_subagents=True):
         if store not in ('sqlite', 'json'):
             raise ValueError('Unknown shop storage mode')
         self.root = Path(root)
         self._operation_lock = RLock()
         self.allow_schedules = bool(allow_schedules)
         self.allow_teams = bool(allow_teams)
+        self.allow_actions = bool(allow_actions)
+        self.enable_subagents = bool(enable_subagents)
+        self.safeguards = safeguards
+        self.data_path = Path(data_path) if data_path is not None else None
+        self.database_path = Path(database_path) if database_path is not None else None
         self.scheduler = None
         self.model = model
         self.knowledge = knowledge
@@ -73,8 +78,11 @@ class LiveSession:
             raise TaskStoreError('TASK_STORE_UNAVAILABLE', '无法安全访问当前账号的内部任务存储。') from None
 
     def _new_harness(self, customer_id):
-        database = self.root / 'data/shop.db' if self.store == 'sqlite' else None
-        shop = Shop(customer_id, self.root / 'data/shop.json', database_path=database)
+        default_data = self.root / ('data/shop-action-seed.json' if self.allow_actions else 'data/shop.json')
+        default_db = self.root / ('data/shop-actions.db' if self.allow_actions else 'data/shop.db')
+        data_file = self.data_path if self.data_path is not None else default_data
+        database = (self.database_path if self.database_path is not None else default_db) if self.store == 'sqlite' else None
+        shop = Shop(customer_id, data_file, database_path=database, allow_actions=self.allow_actions)
         memory_store = None
         selector = None
         if self.allow_memory and customer_id is not None:
@@ -88,11 +96,12 @@ class LiveSession:
         if self.allow_tasks:
             memory_args.update(enable_tasks=True, task_store=self._new_task_store(customer_id)
                                if customer_id is not None else None)
-        return Harness(shop, context, self.model, enable_background=self.allow_background,
+        return Harness(shop, context, self.model, enable_subagents=self.enable_subagents,
+                       enable_background=self.allow_background,
                        background_delay_seconds=self.background_delay_seconds,
                        schedule_handler=(lambda name, args: self._schedule_tool(customer_id, name, args))
                        if self.allow_schedules else None, enable_teams=self.allow_teams,
-                       knowledge=self.knowledge, **memory_args)
+                       knowledge=self.knowledge, safeguards=self.safeguards, **memory_args)
 
     @property
     def context(self):
@@ -241,6 +250,36 @@ class LiveSession:
         if self._closed or self.harness is None:
             raise ValueError('会话已撤销，请退出后重新启动。')
         return self.harness.turn(query)
+
+    @serialized
+    def approve_confirmation(self, confirmation_id, execute_now=True):
+        if self._closed or self.harness is None:
+            raise ValueError('会话已撤销，请退出后重新启动。')
+        return self.harness.approve_confirmation(confirmation_id, execute_now=execute_now)
+
+    @serialized
+    def reject_confirmation(self, confirmation_id):
+        if self._closed or self.harness is None:
+            raise ValueError('会话已撤销，请退出后重新启动。')
+        return self.harness.reject_confirmation(confirmation_id)
+
+    @serialized
+    def pending_confirmations(self):
+        if self._closed or self.harness is None:
+            return []
+        return self.harness.pending_confirmations()
+
+    @serialized
+    def list_tickets(self):
+        if self._closed or self.harness is None:
+            raise ValueError('会话已撤销，请退出后重新启动。')
+        return self.harness.shop.list_my_tickets()
+
+    @serialized
+    def budget_status(self):
+        if self._closed or self.harness is None:
+            return None
+        return self.harness.budget_status()
 
 
     @contextmanager

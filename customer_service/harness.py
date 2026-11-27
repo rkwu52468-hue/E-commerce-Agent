@@ -7,7 +7,16 @@ from time import perf_counter
 from datetime import datetime, timezone
 from .context import ARCHIVE_TOOL, OUTPUT_TOOL, COMPACT_TOOL, ToolResultBudgetError
 from .knowledge import SEARCH_KNOWLEDGE_TOOL, KNOWLEDGE_SYSTEM
-from .shop import failure, MONEY_SYSTEM
+from .safeguards import (
+    DailyTokenBudgetStore,
+    PendingConfirmationGate,
+    SafeguardConfig,
+    TokenBudgetTracker,
+    TurnLoopGuard,
+    call_with_transient_retry,
+    run_with_timeout,
+)
+from .shop import ACTION_SYSTEM, ACTION_TOOL_NAMES, failure, MONEY_SYSTEM
 from .errors import is_context_overflow
 from .hooks import EVENTS, HookRegistry
 from .teams import TeamManager, TEAM_TOOLS, TEAM_SYSTEM
@@ -57,8 +66,38 @@ MEMORY_REJECTION_LABELS = {
 
 
 class Harness:
-    def __init__(self, shop, context, model, max_steps=8, subagent_model=None, enable_subagents=True, skill_loader=None, memory_store=None, memory_selector=None, memory_extractor=None, task_store=None, enable_tasks=False, enable_background=False, background_delay_seconds=0.0, schedule_handler=None, enable_teams=False, team_model=None, team_wait_seconds=65, knowledge=None):
+    def __init__(self, shop, context, model, max_steps=8, subagent_model=None, enable_subagents=True, skill_loader=None, memory_store=None, memory_selector=None, memory_extractor=None, task_store=None, enable_tasks=False, enable_background=False, background_delay_seconds=0.0, schedule_handler=None, enable_teams=False, team_model=None, team_wait_seconds=65, knowledge=None, safeguards: SafeguardConfig | None = None, budget_store: DailyTokenBudgetStore | None = None, retry_sleep_fn=None):
         self.shop, self.context, self.model = shop, context, model
+        self.safeguards = safeguards
+        self._retry_sleep_fn = retry_sleep_fn
+        self._loop_guard = (
+            TurnLoopGuard(
+                max_identical_calls=safeguards.max_identical_tool_calls,
+                max_consecutive_failures=safeguards.max_consecutive_tool_failures,
+            )
+            if safeguards is not None else None
+        )
+        if safeguards is not None:
+            daily_store = budget_store
+            if daily_store is None and safeguards.budget_store_path is not None:
+                daily_store = DailyTokenBudgetStore(safeguards.budget_store_path)
+            self._token_budget = TokenBudgetTracker(
+                max_turn_tokens=safeguards.max_turn_tokens,
+                max_session_tokens=safeguards.max_session_tokens,
+                daily_token_budget=safeguards.daily_token_budget,
+                budget_store=daily_store,
+            )
+        else:
+            self._token_budget = None
+        self.confirmations = (
+            PendingConfirmationGate(
+                context.session_dir.name,
+                shop.customer_id,
+                ttl_seconds=(safeguards.confirmation_ttl_seconds if safeguards is not None else 300.0),
+                allow_chat_confirmation=(safeguards.allow_chat_confirmation if safeguards is not None else True),
+            )
+            if getattr(shop, 'allow_actions', False) else None
+        )
         # Public knowledge is owned by LiveSession; workers do not inherit it.
         self.knowledge = knowledge
         self.max_steps = max_steps
@@ -118,7 +157,13 @@ class Harness:
                                         skill_loader=self.skills)
                           if enable_subagents else None)
         self.tools = copy.deepcopy([*self.shop.tool_definitions(), ARCHIVE_TOOL, OUTPUT_TOOL, TODO_TOOL, self.skills.tool_definition()])
-        self.system = SYSTEM + TODO_SYSTEM + self.skills.system_prompt()
+        base_system = SYSTEM
+        if getattr(self.shop, 'allow_actions', False):
+            base_system = base_system.replace(
+                '当前业务工具都是只读的；todo_write只更新本会话规划清单，不能退款、创建售后单或发送消息。',
+                'todo_write只更新本会话规划清单，不能替代业务工具执行取消、退款或建单。',
+            ) + ACTION_SYSTEM
+        self.system = base_system + TODO_SYSTEM + self.skills.system_prompt()
         if self.knowledge is not None:
             self.tools.append(copy.deepcopy(SEARCH_KNOWLEDGE_TOOL))
             self.system += KNOWLEDGE_SYSTEM
@@ -202,10 +247,14 @@ class Harness:
         # Only a validated business object identifier, never arbitrary arguments.
         keys = {'get_order': 'order_id', 'get_tracking': 'order_id',
                 'get_product': 'product_id', 'get_policy': 'policy_id',
-                'start_tracking_query': 'order_id'}
+                'start_tracking_query': 'order_id', 'check_refund_status': 'order_id'}
         args = call.get('input')
         field = keys.get(tool)
         resource = args.get(field) if field and isinstance(args, dict) and set(args) == {field} else None
+        if tool == 'cancel_order' and isinstance(args, dict) and {'order_id', 'reason'} <= set(args) <= {'order_id', 'reason', 'confirmation_token'}:
+            resource = args.get('order_id')
+        elif tool == 'create_support_ticket' and isinstance(args, dict) and {'category', 'summary', 'priority'} <= set(args) <= {'category', 'summary', 'priority', 'order_id', 'escalate_to_human'}:
+            resource = args.get('order_id')
         if tool == 'schedule_tracking' and isinstance(args, dict) and set(args) == {'order_id', 'cron'}:
             resource = args['order_id']
         elif tool == 'cancel_schedule' and isinstance(args, dict) and set(args) == {'schedule_id'}:
@@ -230,19 +279,48 @@ class Harness:
         prior_failure = self._hooks_failed
         ready = self._trigger_hooks('PreToolUse', self._metadata('PreToolUse', **metadata))
         handler_called = False
+        loop_blocked = None
         if prior_failure or not ready:
             output = failure('HOOK_FAILED', '执行前审计或观察回调未完成；本次工具未执行。')
         else:
-            handler_called = True
-            try:
-                output = self.call_tool(call.get('name'), call.get('input'))
-                if (not isinstance(output, dict) or type(output.get('ok')) is not bool
-                        or (not output['ok'] and (not isinstance(output.get('error'), dict)
-                                                 or not isinstance(output['error'].get('code'), str)))):
-                    raise ValueError('Invalid business tool result')
-                json.dumps(output, ensure_ascii=False)
-            except Exception:
-                output = failure('TOOL_EXECUTION_ERROR', '工具执行失败，未取得可用结果；请检查本地记录。')
+            if self._loop_guard is not None:
+                loop_blocked = self._loop_guard.check(call.get('name'), call.get('input'))
+            if loop_blocked is not None:
+                loop_reason, loop_message = loop_blocked
+                output = failure('REPEATED_TOOL_CALL_BLOCKED', loop_message)
+                try:
+                    self.event('loop_guard_triggered', tool=call.get('name'),
+                               tool_use_id=call['id'], reason=loop_reason)
+                except OSError:
+                    self._hooks_failed = True
+            else:
+                handler_called = True
+                timeout_seconds = (self.safeguards.tool_timeout_seconds
+                                   if self.safeguards is not None else None)
+                try:
+                    if timeout_seconds is not None and timeout_seconds > 0:
+                        output = run_with_timeout(
+                            lambda: self.call_tool(call.get('name'), call.get('input')),
+                            timeout_seconds,
+                        )
+                    else:
+                        output = self.call_tool(call.get('name'), call.get('input'))
+                    if (not isinstance(output, dict) or type(output.get('ok')) is not bool
+                            or (not output['ok'] and (not isinstance(output.get('error'), dict)
+                                                     or not isinstance(output['error'].get('code'), str)))):
+                        raise ValueError('Invalid business tool result')
+                    json.dumps(output, ensure_ascii=False)
+                except TimeoutError:
+                    output = failure('TOOL_TIMEOUT', '工具执行超时，尚未取得可用结果；请向客户说明或调用 create_support_ticket 转人工处理。')
+                    try:
+                        self.event('tool_timeout', tool=call.get('name'),
+                                   tool_use_id=call['id'], timeout_seconds=timeout_seconds)
+                    except OSError:
+                        self._hooks_failed = True
+                except Exception:
+                    output = failure('TOOL_EXECUTION_ERROR', '工具执行失败，未取得可用结果；请检查本地记录。')
+                if self._loop_guard is not None:
+                    self._loop_guard.record(call.get('name'), call.get('input'), output['ok'])
         submitted = (call.get('name') == 'start_tracking_query' and output['ok']
                      and output.get('data', {}).get('status') == 'submitted')
         code = 'BACKGROUND_STARTED' if submitted else 'OK' if output['ok'] else output['error']['code']
@@ -270,12 +348,60 @@ class Harness:
         """Revoke this execution context; readonly worker IO may finish later."""
         self._closed = True
         self.memory_context = ''
+        if self.confirmations is not None:
+            self.confirmations.clear()
         if self.background is not None:
             self.background.close()
         self._background_injected_ids.clear()
         if self.team is not None:
             self.team.close()
         self._team_injected_ids.clear()
+
+    def pending_confirmations(self):
+        if self.confirmations is None:
+            return []
+        return self.confirmations.list_pending()
+
+    def budget_status(self):
+        if self._token_budget is None:
+            return None
+        return self._token_budget.status()
+
+    def approve_confirmation(self, confirmation_id, execute_now=False):
+        """Explicitly approve a pending high-risk write confirmation (and optionally execute it)."""
+        if self._closed or self.confirmations is None:
+            return failure('ACTIONS_DISABLED', '当前会话未开启行动型工具或会话已关闭。')
+        if self.shop.customer_id is None:
+            return failure('AUTHENTICATION_REQUIRED', '请先登录后再确认操作。')
+        token = confirmation_id.strip().lower() if isinstance(confirmation_id, str) else ''
+        approved = self.confirmations.approve(token, via='explicit_command')
+        if approved is None:
+            return failure('INVALID_CONFIRMATION_TOKEN', '未找到对应的待确认操作或确认码已过期。')
+        self._write_audit('ExplicitConfirmation', self._metadata(
+            'ExplicitConfirmation', action=approved['action'],
+            resource_id=approved['order_id'], confirmation_id=token, decision='approved'))
+        if not execute_now:
+            return {'ok': True, 'data': {'confirmation': approved, 'executed': False}}
+        ok, code, record = self.confirmations.consume_if_approved(
+            token, approved['action'], approved['order_id'], self._turn_number + 1)
+        if not ok:
+            return failure(code, '确认令牌校验未通过，未执行操作。')
+        result = self.shop.execute_cancel_order(record['order_id'], record['reason'], record['confirmation_id'])
+        self.event('confirmation_executed', action=record['action'],
+                   confirmation_id=record['confirmation_id'], order_id=record['order_id'],
+                   approved_via=record.get('approved_via'), ok=result['ok'])
+        return result
+
+    def reject_confirmation(self, confirmation_id):
+        if self._closed or self.confirmations is None:
+            return failure('ACTIONS_DISABLED', '当前会话未开启行动型工具或会话已关闭。')
+        token = confirmation_id.strip().lower() if isinstance(confirmation_id, str) else ''
+        removed = self.confirmations.reject(token)
+        if not removed:
+            return failure('INVALID_CONFIRMATION_TOKEN', '未找到对应的待确认操作或确认码已过期。')
+        self._write_audit('ExplicitConfirmation', self._metadata(
+            'ExplicitConfirmation', confirmation_id=token, decision='rejected'))
+        return {'ok': True, 'data': {'confirmation_id': token, 'status': 'rejected'}}
 
     def _background_scope_matches(self):
         return (not self._closed and self.background is not None
@@ -375,6 +501,15 @@ class Harness:
         self._hooks_failed = False
         self._turn_outcome = {'status': 'error', 'reason': 'exception'}
         self._turn_counts = {'tool_calls': 0, 'succeeded': 0, 'denied': 0, 'failed': 0}
+        if self._loop_guard is not None:
+            self._loop_guard.reset()
+        if self._token_budget is not None:
+            self._token_budget.begin_turn()
+        self._confirmation_changes_this_turn = []
+        if self.confirmations is not None:
+            self._confirmation_changes_this_turn = self.confirmations.process_user_reply(query, self._turn_number)
+            for change in self._confirmation_changes_this_turn:
+                self.event('confirmation_reply_decision', **change)
         try:
             if self._trigger_hooks('UserPromptSubmit', self._metadata(
                     'UserPromptSubmit', query_chars=len(query))):
@@ -443,6 +578,11 @@ class Harness:
             state = state.replace('&', r'\u0026').replace('<', r'\u003c').replace('>', r'\u003e')
             system += '\n<background_state>' + state + '</background_state>'
         if not self.todo.items:
+            return system
+        # In cache-safe mode (production/web/action sessions), keep system prompt
+        # byte-for-byte immutable across todo_write updates so KV prefix cache never busts;
+        # latest todo_write tool_result already returns rendered state and next turn appends it.
+        if self.safeguards is not None and self.safeguards.cache_safe_system:
             return system
         # Project live plan state separately from lossy message history. This is
         # model-reported progress, never a source of business facts or authority.
@@ -592,9 +732,26 @@ class Harness:
         # A successful return resets this local counter; the per-turn summary
         # allowance remains shared with automatic and explicit compaction.
         retries = 0
+        transient_limit = 0
+        if self.safeguards is not None and getattr(self.model, 'max_retries', 0) == 0:
+            transient_limit = max(0, int(self.safeguards.model_max_retries))
         while True:
             self.event('model_attempt', step=step + 1, reactive_retry=retries)
             try:
+                if transient_limit > 0:
+                    def on_transient_retry(attempt, delay, err):
+                        self.event('model_transient_retry', step=step + 1, attempt=attempt,
+                                   delay_seconds=delay, error_type=type(err).__name__,
+                                   status_code=getattr(err, 'status_code', None))
+
+                    return call_with_transient_retry(
+                        lambda: self.model.complete(copy.deepcopy(self.messages), self.tools, self._model_system()),
+                        max_retries=transient_limit,
+                        base_delay=self.safeguards.retry_base_delay,
+                        max_delay=self.safeguards.retry_max_delay,
+                        sleep_fn=self._retry_sleep_fn,
+                        on_retry=on_transient_retry,
+                    )
                 return self.model.complete(copy.deepcopy(self.messages), self.tools, self._model_system())
             except Exception as error:
                 overflow = is_context_overflow(error)
@@ -786,7 +943,64 @@ class Harness:
         except Exception:
             return failure('KNOWLEDGE_UNAVAILABLE', '知识库查询失败，未取得可用资料；请检查本地索引，不据此补造政策。')
 
+    def _call_cancel_order(self, args):
+        if not getattr(self.shop, 'allow_actions', False) or self.confirmations is None:
+            return failure('UNKNOWN_TOOL', '没有这个业务工具。')
+        if self.shop.customer_id is None:
+            return failure('AUTHENTICATION_REQUIRED', '请先在终端输入/login完成本地身份验证；不要在聊天中提供密码或验证码。')
+        if (not isinstance(args, dict)
+                or not {'order_id', 'reason'} <= set(args) <= {'order_id', 'reason', 'confirmation_token'}):
+            return failure('INVALID_ARGUMENTS', 'cancel_order参数字段不符合定义。')
+        order_id = args.get('order_id')
+        reason = args.get('reason')
+        token = args.get('confirmation_token')
+        if token is None:
+            preview = self.shop.preview_cancel_order(order_id, reason)
+            if not preview['ok']:
+                return preview
+            clean_order_id = order_id.strip()
+            clean_reason = reason.strip()
+            record = self.confirmations.create(
+                'cancel_order', clean_order_id, clean_reason, preview['data'], current_turn=self._turn_number,
+            )
+            self.event('confirmation_requested', action='cancel_order',
+                       confirmation_id=record['confirmation_id'], order_id=clean_order_id)
+            return failure(
+                'CONFIRMATION_REQUIRED',
+                '取消订单属于高危写操作，已生成二次确认令牌 ' + record['confirmation_id']
+                + '。请向客户说明订单金额及是否会自动退款，等待客户下一轮明确确认（或输入 /confirm '
+                + record['confirmation_id'] + '）后再传入 confirmation_token 执行。',
+                data={
+                    'confirmation_id': record['confirmation_id'],
+                    'order': preview['data']['order'],
+                    'will_create_refund': preview['data']['will_create_refund'],
+                    'refund_amount_cents': preview['data']['refund_amount_cents'],
+                    'currency': preview['data']['currency'],
+                },
+            )
+        if not isinstance(order_id, str) or not isinstance(reason, str):
+            return failure('INVALID_ARGUMENTS', 'cancel_order的order_id与reason必须为字符串。')
+        ok, code, record = self.confirmations.consume_if_approved(
+            token, 'cancel_order', order_id.strip(), self._turn_number,
+        )
+        if not ok:
+            messages = {
+                'CONFIRMATION_PENDING_USER_REPLY': '同一回合内不能由模型自行确认高危操作；请先向客户说明并等待客户下一轮明确确认或执行/confirm。',
+                'CONFIRMATION_NOT_APPROVED': '客户尚未明确确认本次取消操作，未执行取消。',
+                'CONFIRMATION_ALREADY_USED': '该确认令牌已消费，不能重复提交；请先查询订单状态核对结果。',
+                'CONFIRMATION_MISMATCH': '确认令牌与当前客户、操作或订单号不匹配，未执行取消。',
+                'INVALID_CONFIRMATION_TOKEN': '无效或已过期的确认令牌；请不传confirmation_token重新校验并获取新确认码。',
+            }
+            return failure(code, messages.get(code, '确认令牌校验未通过，未执行取消。'))
+        result = self.shop.execute_cancel_order(order_id.strip(), reason.strip(), record['confirmation_id'])
+        self.event('confirmation_executed', action='cancel_order',
+                   confirmation_id=record['confirmation_id'], order_id=order_id.strip(),
+                   approved_via=record.get('approved_via'), ok=result['ok'])
+        return result
+
     def call_tool(self, name, args):
+        if name == 'cancel_order' and getattr(self.shop, 'allow_actions', False):
+            return self._call_cancel_order(args)
         if name == 'search_knowledge':
             return self._call_knowledge(args)
         if isinstance(name, str) and name in {t['name'] for t in TEAM_TOOLS}:
@@ -817,10 +1031,40 @@ class Harness:
             return self.context.query_tool_output(**args)
         return self.shop.call(name, args)
 
+    def _build_user_message(self, query):
+        """Append dynamic state (confirmations & cache-safe todos) at the tail of the latest
+        user message, keeping the system prompt immutable to preserve KV prefix prompt caching."""
+        extra_blocks = []
+        if self.safeguards is not None and self.safeguards.cache_safe_system and self.todo.items:
+            todo_state = plan_projection(self.todo.items)
+            extra_blocks.append({'type': 'text', 'text': '<current_todos>\n' + todo_state + '\n</current_todos>'})
+        if self.confirmations is not None:
+            pending = self.confirmations.list_pending()
+            changes = getattr(self, '_confirmation_changes_this_turn', [])
+            if pending or changes:
+                safe_pending = [
+                    {
+                        'confirmation_id': item['confirmation_id'],
+                        'action': item['action'],
+                        'order_id': item['order_id'],
+                        'status': item['status'],
+                        'created_turn': item['created_turn'],
+                    }
+                    for item in pending
+                ]
+                payload = {'pending': safe_pending}
+                if changes:
+                    payload['decisions'] = changes
+                state_block = '<confirmation_state>' + json.dumps(payload, ensure_ascii=False) + '</confirmation_state>'
+                extra_blocks.append({'type': 'text', 'text': state_block})
+        if not extra_blocks:
+            return {'role': 'user', 'content': query}
+        return {'role': 'user', 'content': [{'type': 'text', 'text': query}, *extra_blocks]}
+
     def _run_turn(self, query):
         self.memory_context = ''
         self.context.begin_turn()
-        self.messages.append({'role': 'user', 'content': query})
+        self.messages.append(self._build_user_message(query))
         for step in range(self.max_steps):
             if not self._collect_team_results():
                 return self._team_delivery_notice
@@ -854,7 +1098,18 @@ class Harness:
                     self._incomplete('memory_event_write_failed')
                     self.snapshot()
                     return '记忆召回记录未完成，本轮尚未请求主模型。'
+            if self._token_budget is not None:
+                exceeded = self._token_budget.check()
+                if exceeded is not None:
+                    scope, current, limit = exceeded
+                    self.event('budget_exceeded', scope=scope, current_tokens=current,
+                               limit_tokens=limit, step=step + 1)
+                    self._incomplete('token_budget_exceeded', scope=scope)
+                    self.snapshot()
+                    return '当前对话或今日体验 Token 预算已达上限，已触发成本熔断保护。请稍后再试或联系人工客服处理。'
             reply = self._complete_with_recovery(query, step)
+            if self._token_budget is not None:
+                self._token_budget.record(reply.get('usage'))
             content = copy.deepcopy(reply['content'])
             if not isinstance(content, list):
                 raise ValueError('Model content must be a list of complete blocks')

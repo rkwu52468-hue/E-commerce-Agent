@@ -63,6 +63,7 @@ def evaluate_context(search, dataset_path, output):
     }
     report = {'recorded_at': datetime.now(timezone.utc).isoformat(),
               'mode': 'real-local-embedding-and-qdrant-evidence-delivery',
+              'retrieval_mode': getattr(search, 'retrieval_mode', 'dense'),
               'question_sha256': hashlib.sha256(raw).hexdigest(),
               'dataset_frozen_at': dataset['frozen_at'], 'index_manifest': search.manifest,
               'summary': summary, 'rows': rows, 'chat_api_calls': 0,
@@ -83,13 +84,17 @@ def evaluate_context(search, dataset_path, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--index-root', type=Path, default=ROOT/'runtime/knowledge_demo')
-    parser.add_argument('--output', type=Path, default=ROOT/'runtime/observations/rag-adjacent-context-evaluation-2026-11-06.json')
+    parser.add_argument('--mode', choices=['dense', 'hybrid'], default='dense')
+    parser.add_argument('--output', type=Path, default=None)
     args = parser.parse_args()
+    output = args.output or (ROOT / f'runtime/observations/rag-adjacent-context-evaluation-{args.mode}-latest.json')
     from customer_service.knowledge import KnowledgeSearch
-    search = KnowledgeSearch(ROOT/'data/knowledge_demo/documents.json',args.index_root,Path(os.environ.get('FASTEMBED_CACHE_PATH') or (ROOT / '.cache' / 'fastembed')))
+    search = KnowledgeSearch(ROOT/'data/knowledge_demo/documents.json',args.index_root,
+                             Path(os.environ.get('FASTEMBED_CACHE_PATH') or (ROOT / '.cache' / 'fastembed')),
+                             retrieval_mode=args.mode)
     try:
-        report = evaluate_context(search,ROOT/'data/knowledge_demo/evaluation-context-v1.json',args.output)
-        print(json.dumps({'summary':report['summary'],'report':str(args.output),'chat_api_calls':0},ensure_ascii=False,indent=2))
+        report = evaluate_context(search,ROOT/'data/knowledge_demo/evaluation-context-v1.json',output)
+        print(json.dumps({'retrieval_mode': args.mode, 'summary':report['summary'],'report':str(output),'chat_api_calls':0},ensure_ascii=False,indent=2))
     finally:
         search.close()
 

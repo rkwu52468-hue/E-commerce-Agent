@@ -4,6 +4,7 @@ Optional dependencies are deliberately lazy: ordinary lessons require neither a
 vector database nor an embedding download.  Test embeddings prove control flow,
 never semantic retrieval quality.
 """
+from collections import Counter
 import hashlib
 import json
 import math
@@ -22,6 +23,12 @@ MIN_SCORE = 0.5
 MAX_RESULT_CHARS = 3000
 MAX_CONTEXT_CHUNKS = 3
 CONTEXT_POLICY = 'adjacent-one-hop-v1'
+RETRIEVAL_MODES = ('dense', 'hybrid')
+HYBRID_CANDIDATE_K = 10
+RRF_K = 60
+BM25_K1 = 1.5
+BM25_B = 0.75
+LEXICAL_MIN_SCORE = 0.65
 SCHEMA_VERSION = 1
 EFFECTIVE_TIMEZONE = 'Asia/Shanghai'
 STORE_TIMEZONE = timezone(timedelta(hours=8), name=EFFECTIVE_TIMEZONE)
@@ -348,11 +355,141 @@ def assemble_context(hits, chunks, eligible_ids, today):
     return context, truncated
 
 
+_ASCII_WORD_RE = re.compile(r'[a-z0-9]{2,}')
+_ASCII_SUBTOKEN_RE = re.compile(r'[a-z]{2,}|[0-9]{2,}')
+_CJK_SPAN_RE = re.compile(r'[\u4e00-\u9fff0-9]*[\u4e00-\u9fff][\u4e00-\u9fff0-9]*')
+
+
+def lexical_tokenize(text):
+    """Tokenize Chinese bigrams and ASCII alphanumeric codes without cross-word noise."""
+    lowered = text.lower()
+    tokens = []
+    for word in _ASCII_WORD_RE.findall(lowered):
+        tokens.append(word)
+        parts = _ASCII_SUBTOKEN_RE.findall(word)
+        if len(parts) > 1:
+            tokens.extend(part for part in parts if part != word)
+    for span in _CJK_SPAN_RE.findall(lowered):
+        if len(span) == 1:
+            tokens.append(span)
+            continue
+        for idx in range(len(span) - 1):
+            bigram = span[idx:idx + 2]
+            if not bigram.isascii():
+                tokens.append(bigram)
+    return tokens
+
+
+def bm25_lexical_search(query, chunks, eligible_ids, today, *,
+                        limit=HYBRID_CANDIDATE_K, min_score=LEXICAL_MIN_SCORE):
+    """Normalized Okapi BM25 over eligible indexed chunks (same title+text scope as dense)."""
+    q_terms = set(lexical_tokenize(query))
+    if not q_terms:
+        return []
+    eligible_chunks = []
+    for chunk in chunks.values():
+        if (chunk['doc_id'], chunk['version']) not in eligible_ids or not _eligible(chunk, today):
+            continue
+        if _digest(chunk['text'].encode('utf-8')) != chunk['content_hash']:
+            raise KnowledgeError('INVALID_INDEX', '词法检索片段与已核对原文的内容哈希不一致。')
+        eligible_chunks.append(chunk)
+    n_docs = len(eligible_chunks)
+    if n_docs == 0:
+        return []
+    doc_tfs = []
+    doc_lens = []
+    df = Counter()
+    for chunk in eligible_chunks:
+        toks = lexical_tokenize(chunk['title'] + '\n' + chunk['text'])
+        counts = Counter(toks)
+        doc_tfs.append(counts)
+        doc_lens.append(len(toks))
+        for term in counts:
+            df[term] += 1
+    avgdl = sum(doc_lens) / n_docs if n_docs else 1.0
+    avgdl = avgdl if avgdl > 0 else 1.0
+    max_idf = math.log(1.0 + (max(n_docs, 1) - 1 + 0.5) / 1.5)
+    ranked = []
+    for chunk, counts, dl in zip(eligible_chunks, doc_tfs, doc_lens):
+        score = 0.0
+        for term in q_terms:
+            tf = counts.get(term, 0)
+            if tf <= 0:
+                continue
+            term_df = df[term]
+            idf = math.log(1.0 + (n_docs - term_df + 0.5) / (term_df + 0.5))
+            norm_idf = idf / max_idf if max_idf > 0 else 1.0
+            denom = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl))
+            score += norm_idf * (tf * (BM25_K1 + 1.0)) / denom
+        if score >= min_score:
+            ranked.append((chunk, round(score, 6)))
+    ranked.sort(key=lambda item: (-item[1], item[0]['chunk_id']))
+    return ranked[:limit]
+
+
+def fuse_rrf(dense_ranked, lexical_ranked, *, top_k=TOP_K, rrf_k=RRF_K):
+    """Reciprocal Rank Fusion combining dense cosine ranks and BM25 lexical ranks."""
+    candidates = {}
+    for rank, (chunk, dense_score) in enumerate(dense_ranked, start=1):
+        cid = chunk['chunk_id']
+        entry = candidates.setdefault(cid, {
+            'chunk': chunk, 'dense_rank': None, 'dense_score': None,
+            'lexical_rank': None, 'lexical_score': None,
+        })
+        entry['dense_rank'] = rank
+        entry['dense_score'] = float(dense_score)
+    for rank, (chunk, lexical_score) in enumerate(lexical_ranked, start=1):
+        cid = chunk['chunk_id']
+        entry = candidates.setdefault(cid, {
+            'chunk': chunk, 'dense_rank': None, 'dense_score': None,
+            'lexical_rank': None, 'lexical_score': None,
+        })
+        entry['lexical_rank'] = rank
+        entry['lexical_score'] = float(lexical_score)
+    scored = []
+    for cid, entry in candidates.items():
+        rrf = 0.0
+        if entry['dense_rank'] is not None:
+            rrf += 1.0 / (rrf_k + entry['dense_rank'])
+        if entry['lexical_rank'] is not None:
+            rrf += 1.0 / (rrf_k + entry['lexical_rank'])
+        scored.append((rrf, entry))
+    scored.sort(key=lambda item: (
+        -item[0],
+        -(item[1]['dense_score'] if item[1]['dense_score'] is not None else -1.0),
+        -(item[1]['lexical_score'] if item[1]['lexical_score'] is not None else -1.0),
+        item[1]['chunk']['chunk_id'],
+    ))
+    hits = []
+    for rrf, entry in scored:
+        if len(hits) >= top_k:
+            break
+        expected = entry['chunk']
+        hit = {key: expected[key] for key in ('chunk_id', 'doc_id', 'title', 'version', 'source',
+                                             'text', 'content_hash', 'kind')}
+        hit['score'] = round(rrf, 6)
+        hit['dense_score'] = entry['dense_score']
+        hit['lexical_score'] = entry['lexical_score']
+        if entry['dense_rank'] is not None and entry['lexical_rank'] is not None:
+            hit['matched_by'] = 'dense+lexical'
+        elif entry['dense_rank'] is not None:
+            hit['matched_by'] = 'dense'
+        else:
+            hit['matched_by'] = 'lexical'
+        if len(_canonical([*hits, hit])) > MAX_RESULT_CHARS:
+            break
+        hits.append(hit)
+    return hits
+
+
 class KnowledgeSearch:
     """Read one immutable index generation, and revalidate sources per query."""
-    def __init__(self, documents_path, index_root, cache_dir, *, embedder=None):
+    def __init__(self, documents_path, index_root, cache_dir, *, embedder=None, retrieval_mode='dense'):
+        if retrieval_mode not in RETRIEVAL_MODES:
+            raise KnowledgeError('INVALID_ARGUMENTS', 'retrieval_mode须为dense或hybrid。')
         self.documents_path = Path(documents_path)
         self.index_root = Path(index_root)
+        self.retrieval_mode = retrieval_mode
         self.client = None
         self.closed = False
         try:
@@ -397,7 +534,10 @@ class KnowledgeSearch:
             self.close()
             raise KnowledgeError('KNOWLEDGE_UNAVAILABLE', '知识索引不可用，请先建库或检查本地索引。') from error
 
-    def search(self, query):
+    def search(self, query, *, mode=None):
+        effective_mode = self.retrieval_mode if mode is None else mode
+        if effective_mode not in RETRIEVAL_MODES:
+            return _failure('INVALID_ARGUMENTS', 'retrieval_mode须为dense或hybrid。')
         if not isinstance(query, str) or not query.strip() or len(query) > 500:
             return _failure('INVALID_ARGUMENTS', 'query须为1至500字符的非空字符串。')
         if self.closed or self.client is None:
@@ -427,35 +567,53 @@ class KnowledgeSearch:
                 m.FieldCondition(key='effective_from_day', range=m.Range(lte=today.toordinal())),
                 m.FieldCondition(key='effective_to_day', range=m.Range(gte=today.toordinal())),
             ])
+            dense_limit = TOP_K if effective_mode == 'dense' else HYBRID_CANDIDATE_K
             points = self.client.query_points(COLLECTION, query=vector, query_filter=query_filter,
-                                              limit=TOP_K, score_threshold=MIN_SCORE,
+                                              limit=dense_limit, score_threshold=MIN_SCORE,
                                               with_payload=True, with_vectors=False).points
-            hits = []
+            validated_dense = []
             for point in points:
                 payload = point.payload or {}
                 expected = self.chunks.get(payload.get('chunk_id'))
                 if (expected is None or payload != expected or str(point.id) != expected['point_id']
                         or (expected['doc_id'], expected['version']) not in eligible_ids):
                     raise KnowledgeError('INVALID_INDEX', '检索片段与当前权威原文不一致。')
-                hit = {key: expected[key] for key in ('chunk_id', 'doc_id', 'title', 'version', 'source',
-                                                     'text', 'content_hash', 'kind')}
-                hit['score'] = float(point.score)
-                if len(_canonical([*hits, hit])) > MAX_RESULT_CHARS:
-                    break
-                hits.append(hit)
+                validated_dense.append((expected, float(point.score)))
+            if effective_mode == 'hybrid':
+                lexical_ranked = bm25_lexical_search(query, self.chunks, eligible_ids, today,
+                                                     limit=HYBRID_CANDIDATE_K, min_score=LEXICAL_MIN_SCORE)
+                hits = fuse_rrf(validated_dense, lexical_ranked, top_k=TOP_K, rrf_k=RRF_K)
+            else:
+                hits = []
+                for expected, score in validated_dense:
+                    hit = {key: expected[key] for key in ('chunk_id', 'doc_id', 'title', 'version', 'source',
+                                                         'text', 'content_hash', 'kind')}
+                    hit['score'] = score
+                    if len(_canonical([*hits, hit])) > MAX_RESULT_CHARS:
+                        break
+                    hits.append(hit)
             context, context_truncated = assemble_context(hits, self.chunks, eligible_ids, today)
-            return {'ok': True, 'data': {'hits': hits, 'context': context,
-                                         'status': 'matched' if hits else 'no_match',
-                                         'query': query, 'top_k': TOP_K, 'min_score': MIN_SCORE,
-                                         'score_meaning': 'cosine ranking signal, not correctness probability',
-                                         'context_policy': CONTEXT_POLICY,
-                                         'context_limit': MAX_CONTEXT_CHUNKS,
-                                         'context_truncated': context_truncated,
-                                         'context_boundary': 'one hop; same document, version, source and effective public store scope',
-                                         'context_score_meaning': 'null; neighboring source text, not an independently scored vector hit',
-                                         'evidence_char_budget': MAX_RESULT_CHARS,
-                                         'index_generation': self.manifest['generation']},
-                    'simulated': True, 'dataset_version': 'knowledge-demo-v1'}
+            data = {'hits': hits, 'context': context,
+                    'status': 'matched' if hits else 'no_match',
+                    'query': query, 'top_k': TOP_K, 'min_score': MIN_SCORE,
+                    'score_meaning': ('rrf hybrid ranking signal (dense + bm25 lexical), not correctness probability'
+                                      if effective_mode == 'hybrid'
+                                      else 'cosine ranking signal, not correctness probability'),
+                    'context_policy': CONTEXT_POLICY,
+                    'context_limit': MAX_CONTEXT_CHUNKS,
+                    'context_truncated': context_truncated,
+                    'context_boundary': 'one hop; same document, version, source and effective public store scope',
+                    'context_score_meaning': 'null; neighboring source text, not an independently scored vector hit',
+                    'evidence_char_budget': MAX_RESULT_CHARS,
+                    'index_generation': self.manifest['generation']}
+            if effective_mode == 'hybrid':
+                data.update({
+                    'retrieval_mode': 'hybrid',
+                    'rrf_k': RRF_K,
+                    'hybrid_candidate_k': HYBRID_CANDIDATE_K,
+                    'lexical_min_score': LEXICAL_MIN_SCORE,
+                })
+            return {'ok': True, 'data': data, 'simulated': True, 'dataset_version': 'knowledge-demo-v1'}
         except KnowledgeError as error:
             return _failure(error.code, str(error))
         except Exception:

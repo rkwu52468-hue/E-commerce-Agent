@@ -1,0 +1,7 @@
+-r requirements.txt
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+httpx>=0.27.0
+# Optional: enable Langfuse cloud/self-hosted tracing by installing langfuse and setting
+# LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY (+ optional LANGFUSE_HOST).
+# langfuse>=2.50.0

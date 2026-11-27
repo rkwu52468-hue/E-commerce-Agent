@@ -1,4 +1,6 @@
 """Live adapter is loaded only by explicit --live; offline replies are scripted."""
+from .safeguards import call_with_transient_retry
+
 
 class ScriptedModel:
     mode = 'scripted-offline'
@@ -18,15 +20,40 @@ class ScriptedModel:
 class AnthropicModel:
     mode = 'live-deepseek'
 
-    def __init__(self, api_key, config):
-        from anthropic import Anthropic
-        self.client = Anthropic(api_key=api_key, base_url=config['base_url'],
-                                max_retries=0, timeout=60)
+    def __init__(self, api_key, config, max_retries=0, retry_base_delay=0.5,
+                 retry_max_delay=4.0, sleep_fn=None, client=None):
+        if client is not None:
+            self.client = client
+        else:
+            from anthropic import Anthropic
+            self.client = Anthropic(api_key=api_key, base_url=config['base_url'],
+                                    max_retries=0, timeout=60)
         self.model = config['model']
+        self.max_retries = max(0, int(max_retries))
+        self.retry_base_delay = float(retry_base_delay)
+        self.retry_max_delay = float(retry_max_delay)
+        self._sleep_fn = sleep_fn
+        self.last_retry_count = 0
 
     def complete(self, messages, tools, system):
-        response = self.client.messages.create(model=self.model, messages=messages,
-                    tools=tools, system=system, max_tokens=2048)
+        retries = {'count': 0}
+
+        def record_retry(attempt, delay, error):
+            retries['count'] = attempt
+
+        def invoke():
+            return self.client.messages.create(model=self.model, messages=messages,
+                                               tools=tools, system=system, max_tokens=2048)
+
+        response = call_with_transient_retry(
+            invoke,
+            max_retries=self.max_retries,
+            base_delay=self.retry_base_delay,
+            max_delay=self.retry_max_delay,
+            sleep_fn=self._sleep_fn,
+            on_retry=record_retry,
+        )
+        self.last_retry_count = retries['count']
         # Keep the complete assistant array, including any thinking blocks.
         return {'content': [block.model_dump(mode='json', exclude_none=True) for block in response.content],
                 'stop_reason': response.stop_reason,

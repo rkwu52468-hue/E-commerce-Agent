@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>desk.cs — 电商智能售后工作台 · Action-Capable Support Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&family=Noto+Sans+SC:wght@300;400;500&family=Noto+Serif+SC:wght@300;400;500&family=Red+Hat+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="stage paper" id="page">
+    <div class="g-grid">
+
+      <!-- Left Sticky Editorial Rail (exe.dev field-manual nav) -->
+      <aside class="rail" id="rail" aria-label="工作台导航">
+        <div class="rail-top">
+          <a class="rail-logo" href="#top" aria-label="desk.cs 首页">
+            <svg class="brand-svg" id="mascot-svg" viewBox="0 0 210 64" aria-hidden="true">
+              <!-- Tactile starburst mark with subtle pointer-tracking eyes -->
+              <g class="mascot-body" transform="translate(2, 2)">
+                <path class="lb" d="M30 2 L34.8 14.2 L47.6 8.2 L44.4 21.1 L58 24.4 L47.2 33 L55.4 44.8 L41.9 44.3 L41.8 58 L30 50.2 L18.2 58 L18.1 44.3 L4.6 44.8 L12.8 33 L2 24.4 L15.6 21.1 L12.4 8.2 L25.2 14.2 Z"/>
+                <circle class="le" cx="23.5" cy="29.5" r="5.6"/>
+                <circle class="le" cx="37.2" cy="29.5" r="5.6"/>
+                <circle class="lp" id="eye-left" cx="24.5" cy="29.5" r="2.5"/>
+                <circle class="lp" id="eye-right" cx="38.2" cy="29.5" r="2.5"/>
+                <ellipse class="lm" cx="30.3" cy="36.6" rx="4.2" ry="2.1"/>
+              </g>
+              <text x="72" y="42" class="brand-word">desk.cs</text>
+            </svg>
+          </a>
+          <button class="theme-btn" id="theme-toggle" type="button" title="切换明暗纸面">
+            <span id="theme-label">DARK</span>
+          </button>
+        </div>
+
+        <div class="rail-middle">
+          <div class="rail-section-label">IDENTITY · 身份绑定</div>
+          <div class="identity-box" id="identity-box">
+            <div class="id-row">
+              <span class="dot" id="identity-dot"></span>
+              <span class="id-principal" id="identity-name">GUEST（访客）</span>
+            </div>
+            <div class="id-meta" id="identity-meta">仅可查公开商品、政策与知识库</div>
+          </div>
+
+          <nav class="rail-nav" id="account-nav" aria-label="模拟客户快速切换">
+            <button class="pen-nav" type="button" data-switch-customer="alice" id="nav-alice">alice · 6 笔多态订单</button>
+            <button class="pen-nav" type="button" data-switch-customer="bob" id="nav-bob">bob · 含拒退申诉单</button>
+            <button class="pen-nav" type="button" data-switch-customer="charlie" id="nav-charlie">charlie · 待付/打款单</button>
+            <button class="pen-nav rail-logout-link" type="button" id="nav-logout">退出至访客（guest）</button>
+          </nav>
+
+          <details class="pw-login-box" id="pw-login-box">
+            <summary class="pen-link">使用本地密码登录（--init-auth）</summary>
+            <form id="pw-login-form" class="pw-form">
+              <select id="pw-customer" aria-label="选择账号">
+                <option value="alice">alice</option>
+                <option value="bob">bob</option>
+                <option value="charlie">charlie</option>
+              </select>
+              <input id="pw-password" type="password" placeholder="本地账号密码（15-128位）" autocomplete="current-password">
+              <button class="btn btn-primary btn-sm" type="submit">校验登录</button>
+              <div class="pw-msg" id="pw-msg"></div>
+            </form>
+          </details>
+        </div>
+
+        <div class="rail-foot">
+          <button class="cta-cmd" type="button" id="copy-session-btn" data-copy="session" title="复制当前会话 ID">
+            <span class="cmd">
+              <span class="label" id="session-id-label">ws_initializing</span>
+              <span class="copied">已复制会话 ID</span>
+            </span>
+            <svg class="cta-icon i-copy" viewBox="0 0 20 20" aria-hidden="true">
+              <rect x="6.5" y="6.5" width="9" height="10" rx=".6"/>
+              <path d="M4.5 13.5v-9a1 1 0 0 1 1-1h7"/>
+            </svg>
+            <svg class="cta-icon i-done" viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M4.5 10.5l3.6 3.6 7.4-8.2"/>
+            </svg>
+          </button>
+          <button class="btn btn-primary" type="button" id="reset-db-btn">重置演示数据库</button>
+          <div class="rail-footnote">全部为本地模拟数据 · 真实 SQLite 事务</div>
+        </div>
+      </aside>
+
+      <!-- Main Paper Desk Surface -->
+      <div class="g-main" id="top">
+
+        <!-- Mobile Top Bar -->
+        <header class="g-bar">
+          <span class="mobile-brand">desk.cs · 售后工作台</span>
+          <div class="g-bar-end">
+            <span class="mobile-id" id="mobile-id">GUEST</span>
+            <button class="btn btn-primary btn-sm" id="mobile-alice-btn" type="button">切至 alice</button>
+          </div>
+        </header>
+
+        <!-- Sheet 1: Slate Blue Printed Hero Sheet with Punched Holes & Binding Hairline -->
+        <section class="sheet h-sheet" data-holes="true" aria-label="系统概览">
+          <i class="binding-line" aria-hidden="true"></i>
+          <i class="split-line" aria-hidden="true"></i>
+
+          <div class="h-head">
+            <div class="sheet-eyebrow" data-tick="cap">FIELD MANUAL · STAGE 3 LIVE WORKBENCH</div>
+            <h1 data-tick="base">可控、可证、可执行的<br>电商智能售后工作台</h1>
+          </div>
+
+          <div class="h-side">
+            <p class="h-sub" data-tick="cap">
+              真实 SQLite 事务读写、两步高危确认门控、Hybrid RRF 检索与四大生产护栏。所有写操作可审计，所有事实带出处。
+            </p>
+            <div class="hero-badges" id="hero-badges" data-tick="bottom">
+              <span class="spec-chip" id="badge-model">MODE · LOADING</span>
+              <span class="spec-chip" id="badge-rag">RAG · HYBRID RRF</span>
+              <span class="spec-chip" id="badge-eval">E2E 100 · DB 100%</span>
+              <span class="spec-chip" id="badge-lf">TRACE · HOOKS</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Sheet 2: Warm Tan Field-Manual Workbench Sheet holding Dual Precision Instruments -->
+        <section class="sheet wb-sheet" data-holes="true" aria-label="交互工作台">
+          <i class="binding-line" aria-hidden="true"></i>
+
+          <div class="wb-inner">
+            <!-- Quick Scenario Strip (Starburst Bullets) -->
+            <div class="scenario-strip">
+              <div class="strip-title"><span class="star" aria-hidden="true"></span><span>一键体验典型业务与安全边界（点击自动发送）</span></div>
+              <div class="scenario-chips" id="scenario-chips">
+                <button type="button" class="sc-chip" data-prompt="P104 是什么商品、卖多少钱？另外你们的订单取消规则是什么？">01 · 商品与取消规则</button>
+                <button type="button" class="sc-chip" data-prompt="列出我名下的所有订单，说明每笔的状态和实付金额。">02 · 查本人全量订单</button>
+                <button type="button" class="sc-chip" data-prompt="帮我取消还没发货的 A1003，原因是买错容量想重拍。">03 · 取消 A1003（两步确认）</button>
+                <button type="button" class="sc-chip" data-prompt="帮我查一下订单 B2001 的实付金额和收货状态。">04 · 跨客户查 B2001（越权拦截）</button>
+                <button type="button" class="sc-chip" data-prompt="保温杯能用钢丝球和研磨粉刷吗？能放进洗碗机消毒吗？">05 · Hybrid RAG 清洗禁忌</button>
+                <button type="button" class="sc-chip" data-prompt="我的订单 A1001 物流严重延误，请核实物流并帮我创建人工升级工单。">06 · 延误核实 + 人工升级</button>
+              </div>
+            </div>
+
+            <!-- Dual Dark Instrument Workbench -->
+            <div class="wb-grid">
+
+              <!-- LEFT INSTRUMENT: Live SSE Agent Console -->
+              <section class="ui-d console-card" aria-label="智能客服流式对话台">
+                <header class="ui-d-head">
+                  <div class="ui-d-tab on">AGENT CONSOLE</div>
+                  <div class="ui-d-meta">
+                    <span class="dot" id="stream-dot"></span>
+                    <span id="stream-status">READY</span>
+                  </div>
+                  <div class="ui-d-meta ml-auto" id="rate-limit-meta">RPM --</div>
+                  <button class="ui-d-tab ui-d-action-tab" type="button" id="clear-chat-btn" title="清空页面显示（不清除数据库）">CLEAR</button>
+                </header>
+
+                <div class="ui-d-body console-body">
+                  <!-- Live Tool Execution Transit Wire -->
+                  <div class="transit-bar" id="transit-bar" hidden>
+                    <div class="transit-label">
+                      <span class="ui-d-label" id="transit-tool-name">TOOL IN FLIGHT</span>
+                      <span class="transit-detail" id="transit-tool-detail">executing...</span>
+                    </div>
+                    <div class="transit-wire">
+                      <i class="pkt-spark"></i>
+                    </div>
+                  </div>
+
+                  <!-- Visual 2-Step Confirmation Gate Card (appears dynamically when pending_confirmations > 0) -->
+                  <div class="confirm-dock" id="confirm-dock" hidden></div>
+
+                  <!-- Chat Transcript -->
+                  <div class="chat-feed" id="chat-feed" role="log" aria-live="polite">
+                    <article class="msg msg-system">
+                      <div class="msg-meta">SYSTEM · DESK.CS READY</div>
+                      <div class="msg-content">
+                        欢迎进入电商智能售后工作台。当前默认以 <code>访客（guest）</code> 身份启动：可直接咨询公开商品、店铺政策与 Hybrid RRF 知识库；点击左侧 <code>alice / bob / charlie</code> 切换模拟身份后，即可体验查单、两步确认取消、自动退款与人工升级工单，并在右侧实时观测 SQLite 落库变化。
+                      </div>
+                    </article>
+                  </div>
+
+                  <!-- Bottom Terminal Prompt Input -->
+                  <form class="ui-d-term prompt-form" id="chat-form">
+                    <div class="prompt-head">
+                      <span class="p" id="prompt-prefix">guest@desk &gt;&gt;</span>
+                      <span class="c" id="prompt-hint">Enter 发送 · Shift+Enter 换行</span>
+                    </div>
+                    <div class="prompt-input-row">
+                      <textarea id="chat-input" rows="2" placeholder="输入客户咨询，例如：帮我取消还没发货的 A1003..." maxlength="2000"></textarea>
+                      <button class="ui-d-btn send-btn" id="send-btn" type="submit">发送 ↵</button>
+                    </div>
+                  </form>
+                </div>
+              </section>
+
+              <!-- RIGHT INSTRUMENT: Live SQLite State Ledger + Hatched Cache Pool -->
+              <aside class="ui-d ledger-card" aria-label="实时业务账本与观测面板">
+                <header class="ui-d-head" role="tablist">
+                  <button class="ui-d-tab" role="tab" aria-selected="true" data-tab="orders">ORDERS <span class="tab-cnt" id="cnt-orders">0</span></button>
+                  <button class="ui-d-tab" role="tab" aria-selected="false" data-tab="aftersales">REFUND/TK <span class="tab-cnt" id="cnt-aftersales">0</span></button>
+                  <button class="ui-d-tab" role="tab" aria-selected="false" data-tab="catalog">SKU <span class="tab-cnt" id="cnt-catalog">6</span></button>
+                  <button class="ui-d-tab" role="tab" aria-selected="false" data-tab="traces">TRACE <span class="tab-cnt" id="cnt-traces">0</span></button>
+                </header>
+
+                <div class="ui-d-body ledger-body">
+                  <!-- Tabbed Live Data Views -->
+                  <div class="ledger-pane" id="pane-orders">
+                    <div class="pane-head">
+                      <span class="ui-d-label">SQLITE LIVE ORDERS</span>
+                      <span class="pane-sub" id="orders-owner-label">需先登录查看本人订单</span>
+                    </div>
+                    <ul class="vms" id="orders-list"></ul>
+                  </div>
+
+                  <div class="ledger-pane" id="pane-aftersales" hidden>
+                    <div class="pane-head">
+                      <span class="ui-d-label">AUTO REFUNDS · 退款单</span>
+                      <span class="pane-sub" id="refunds-sub">实时读取 refunds 表</span>
+                    </div>
+                    <ul class="vms" id="refunds-list"></ul>
+
+                    <div class="pane-head mt-18">
+                      <span class="ui-d-label">SUPPORT TICKETS · 售后与人工升级工单</span>
+                      <span class="pane-sub" id="tickets-sub">实时读取 tickets 表</span>
+                    </div>
+                    <ul class="vms" id="tickets-list"></ul>
+                  </div>
+
+                  <div class="ledger-pane" id="pane-catalog" hidden>
+                    <div class="pane-head">
+                      <span class="ui-d-label">PUBLIC CATALOG · 公开商品库</span>
+                      <span class="pane-sub">访客可读 · 点击快捷问价</span>
+                    </div>
+                    <ul class="vms" id="catalog-list"></ul>
+                  </div>
+
+                  <div class="ledger-pane" id="pane-traces" hidden>
+                    <div class="pane-head">
+                      <span class="ui-d-label">HOOK TELEMETRY · 工具执行审计</span>
+                      <span class="pane-sub" id="trace-lf-label">METADATA ONLY</span>
+                    </div>
+                    <ul class="vms trace-list" id="traces-list"></ul>
+                  </div>
+
+                  <!-- Persistent Hatched Token & Prompt Cache Pool Meter (exe.dev .pool-bar style) -->
+                  <div class="pool-section">
+                    <div class="pool-row">
+                      <span class="ui-d-label">PROMPT CACHE &amp; TOKEN BUDGET</span>
+                      <b id="cache-hit-pct">HIT 0.0%</b>
+                    </div>
+                    <div class="pool-bar" aria-label="Token 预算与缓存命中分布">
+                      <div class="seg hatch seg-cached" id="seg-cached" title="Cache Read Tokens"></div>
+                      <div class="seg hatch seg-uncached" id="seg-uncached" title="Uncached Input Tokens"></div>
+                      <div class="seg hatch seg-output" id="seg-output" title="Output Tokens"></div>
+                      <div class="free" id="seg-free" title="Remaining Session Budget"></div>
+                    </div>
+                    <div class="pool-ticks" style="--ticks: 16"></div>
+                    <div class="pool-foot">
+                      <span><i class="sw-mini sw-green"></i> 缓存命中 <strong id="stat-cached">0</strong></span>
+                      <span><i class="sw-mini sw-orange"></i> 未命中 <strong id="stat-uncached">0</strong></span>
+                      <span><i class="sw-mini sw-blue"></i> 输出 <strong id="stat-output">0</strong></span>
+                      <span>会话 <strong id="stat-session">0</strong> / <span id="stat-session-cap">200k</span></span>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+
+            </div>
+          </div>
+        </section>
+
+        <!-- Minimal Editorial Footer Sheet -->
+        <footer class="sheet foot-sheet" data-holes="true">
+          <i class="binding-line" aria-hidden="true"></i>
+          <div class="foot-inner">
+            <div class="foot-left">
+              <div class="sheet-eyebrow">VERIFIED ENGINEERING SNAPSHOT</div>
+              <p class="foot-copy">519 项单元测试 · Hybrid Search RRF Holdout Recall@3 0.9375 (+12.5pp) · 100 题真实 DeepSeek 评测 DB 终态 100% / 人工升级 100% / 缓存命中 90.35%。</p>
+            </div>
+            <div class="foot-right">
+              <span class="foot-tag" id="foot-dataset">DATASET · action-sqlite-2026-11-26</span>
+              <span class="foot-tag">FASTAPI · SSE · SQLITE · QDRANT</span>
+            </div>
+          </div>
+        </footer>
+
+      </div>
+    </div>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

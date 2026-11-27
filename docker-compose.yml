@@ -1,0 +1,38 @@
+services:
+  ecommerce-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_RAG: "${INSTALL_RAG:-true}"
+    image: ecommerce-support-agent:latest
+    container_name: ecommerce-support-agent
+    ports:
+      - "${HOST_PORT:-8000}:7860"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "7860"
+      # auto = uses live DeepSeek when DEEPSEEK_API_KEY is set, otherwise zero-API demo mode
+      APP_MODE: "${APP_MODE:-auto}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      RETRIEVAL_MODE: "${RETRIEVAL_MODE:-hybrid}"
+      RATE_LIMIT_RPM: "${RATE_LIMIT_RPM:-30}"
+      DAILY_TOKEN_BUDGET: "${DAILY_TOKEN_BUDGET:-500000}"
+      STRICT_AUTH: "${STRICT_AUTH:-false}"
+      # Optional Langfuse observability (leave empty to use local in-process hooks only)
+      LANGFUSE_PUBLIC_KEY: "${LANGFUSE_PUBLIC_KEY:-}"
+      LANGFUSE_SECRET_KEY: "${LANGFUSE_SECRET_KEY:-}"
+      LANGFUSE_HOST: "${LANGFUSE_HOST:-}"
+    volumes:
+      # Persist runtime session logs, demo SQLite DB, and daily token budget across container restarts
+      - agent_runtime:/app/runtime
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  agent_runtime:

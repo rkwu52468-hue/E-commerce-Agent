@@ -36,7 +36,7 @@ def lexical_rank(query, chunks):
     return list(dict.fromkeys(r[2] for r in ranked[:3]))
 
 
-def evaluate(search, questions_path, output):
+def evaluate(search, questions_path, output, *, compare_hybrid=True):
     questions = json.loads(Path(questions_path).read_text(encoding='utf-8'))
     rows = []
     for question in questions:
@@ -52,22 +52,42 @@ def evaluate(search, questions_path, output):
         found = expected.intersection(ranked)
         reciprocal = next((1 / (i + 1) for i, doc in enumerate(ranked) if doc in expected), 0)
         baseline = lexical_rank(question['query'], search.chunks)
-        rows.append({**question, 'retrieved_doc_ids': ranked, 'hits': hits,
-                     'doc_recall_at_3': len(found) / len(expected) if expected else None,
-                     'reciprocal_rank': reciprocal if expected else None,
-                     'lexical_doc_ids': baseline,
-                     'lexical_doc_recall_at_3': len(expected.intersection(baseline)) / len(expected) if expected else None,
-                     'retrieval_ms': round(elapsed, 3),
-                     'returned_any_context': bool(hits or context),
-                     'context': context,
-                     'main_and_context_json_chars': len(json.dumps(hits + context, ensure_ascii=False, sort_keys=True, separators=(',', ':'))),
-                     'retrieval_context_policy': result['data'].get('context_policy')})
+        row = {**question, 'retrieved_doc_ids': ranked, 'hits': hits,
+               'doc_recall_at_3': len(found) / len(expected) if expected else None,
+               'reciprocal_rank': reciprocal if expected else None,
+               'lexical_doc_ids': baseline,
+               'lexical_doc_recall_at_3': len(expected.intersection(baseline)) / len(expected) if expected else None,
+               'retrieval_ms': round(elapsed, 3),
+               'returned_any_context': bool(hits or context),
+               'context': context,
+               'main_and_context_json_chars': len(json.dumps(hits + context, ensure_ascii=False, sort_keys=True, separators=(',', ':'))),
+               'retrieval_context_policy': result['data'].get('context_policy')}
+        if compare_hybrid:
+            h_started = perf_counter()
+            h_result = search.search(question['query'], mode='hybrid')
+            h_elapsed = (perf_counter() - h_started) * 1000
+            if not h_result.get('ok'):
+                raise RuntimeError('Hybrid evaluation query failed: ' + json.dumps(h_result, ensure_ascii=False))
+            h_hits = h_result['data']['hits']
+            h_context = h_result['data'].get('context', [])
+            h_ranked = list(dict.fromkeys(h['doc_id'] for h in h_hits))
+            h_found = expected.intersection(h_ranked)
+            h_rr = next((1 / (i + 1) for i, doc in enumerate(h_ranked) if doc in expected), 0)
+            row.update({
+                'hybrid_doc_ids': h_ranked,
+                'hybrid_doc_recall_at_3': len(h_found) / len(expected) if expected else None,
+                'hybrid_reciprocal_rank': h_rr if expected else None,
+                'hybrid_returned_any_context': bool(h_hits or h_context),
+                'hybrid_retrieval_ms': round(h_elapsed, 3),
+                'hybrid_hits': h_hits,
+            })
+        rows.append(row)
     groups = {}
     for split in ('dev', 'holdout'):
         group = [r for r in rows if r['split'] == split]
         labelled = [r for r in group if r['expected_doc_ids']]
         unsupported = [r for r in group if r['answerability'] == 'out_of_scope']
-        groups[split] = {
+        summary = {
             'questions': len(group), 'labelled_retrieval_questions': len(labelled),
             'mean_doc_recall_at_3': mean(r['doc_recall_at_3'] for r in labelled) if labelled else None,
             'document_mrr_at_3': mean(r['reciprocal_rank'] for r in labelled) if labelled else None,
@@ -76,12 +96,22 @@ def evaluate(search, questions_path, output):
             'out_of_scope_with_context': sum(r['returned_any_context'] for r in unsupported),
             'mean_retrieval_ms': mean(r['retrieval_ms'] for r in group) if group else None,
         }
+        if compare_hybrid:
+            summary.update({
+                'hybrid_mean_doc_recall_at_3': mean(r['hybrid_doc_recall_at_3'] for r in labelled) if labelled else None,
+                'hybrid_document_mrr_at_3': mean(r['hybrid_reciprocal_rank'] for r in labelled) if labelled else None,
+                'hybrid_out_of_scope_with_context': sum(r['hybrid_returned_any_context'] for r in unsupported),
+                'hybrid_mean_retrieval_ms': mean(r['hybrid_retrieval_ms'] for r in group) if group else None,
+            })
+        groups[split] = summary
     report = {
         'recorded_at': datetime.now(timezone.utc).isoformat(),
         'mode': 'real-local-chinese-embedding-qdrant', 'chat_api_calls': 0,
+        'primary_retrieval_mode': search.retrieval_mode,
         'index_manifest': search.manifest,
-        'context_metrics_note': 'Doc Recall@3 still scores dense hits only; use tools/evaluate_knowledge_context.py to measure added context evidence.',
+        'context_metrics_note': 'Doc Recall@3 scores top-3 hits only; use tools/evaluate_knowledge_context.py to measure added context evidence.',
         'keyword_baseline': 'character-bigram cosine, same chunks/top3; vector threshold and lexical nonzero rule differ',
+        'hybrid_method': 'RRF(k=60) over dense top-10 (cosine>=0.5) + normalized Okapi BM25 top-10 (min_score=0.65)' if compare_hybrid else None,
         'question_sha256': hashlib.sha256(Path(questions_path).read_bytes()).hexdigest(),
         'question_categories': dict(Counter(r['category'] for r in rows)),
         'summary': groups, 'rows': rows,
@@ -101,6 +131,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['build', 'search', 'evaluate'])
     parser.add_argument('query', nargs='?')
+    parser.add_argument('--mode', choices=['dense', 'hybrid'], default='dense',
+                        help='Primary retrieval mode for search/evaluate (default: dense)')
+    parser.add_argument('--output', type=Path, default=None,
+                        help='Optional output path for evaluate report')
     args = parser.parse_args()
     from .knowledge import KnowledgeSearch, build_index
     documents = ROOT / 'data/knowledge_demo/documents.json'
@@ -110,14 +144,14 @@ def main():
             manifest = build_index(documents, indexes, CACHE)
             print(json.dumps(manifest, ensure_ascii=False, indent=2))
             return
-        search = KnowledgeSearch(documents, indexes, CACHE)
+        search = KnowledgeSearch(documents, indexes, CACHE, retrieval_mode=args.mode)
         try:
             if args.action == 'search':
                 if not args.query:
                     parser.error('search requires a quoted question')
                 print(json.dumps(search.search(args.query), ensure_ascii=False, indent=2))
             else:
-                output = ROOT / 'runtime/observations/rag-vector-retrieval-context-2026-11-06.json'
+                output = args.output or (ROOT / 'runtime/observations/rag-hybrid-retrieval-latest.json')
                 report = evaluate(search, ROOT / 'data/knowledge_demo/evaluation.json', output)
                 print(json.dumps({'summary': report['summary'], 'report': str(output),
                                   'chat_api_calls': 0}, ensure_ascii=False, indent=2))

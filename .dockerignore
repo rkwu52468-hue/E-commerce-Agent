@@ -1,0 +1,37 @@
+# Exclude local environments, secrets, caches, and runtime artifacts from Docker builds
+.git
+.gitignore
+.venv
+.venv-rag
+venv
+env
+__pycache__
+*.py[cod]
+.pytest_cache
+.cache
+.tmp
+.env
+.env.*
+!.env.example
+
+# Never bake local runtime state, SQLite databases, or auth credentials into images
+runtime/*
+!runtime/.gitkeep
+data/auth/
+data/memory/
+data/tasks/
+data/schedules/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.log
+*.jsonl
+
+# Local tooling / OS files
+.vscode
+.vs
+.DS_Store
+Thumbs.db
+AGENTS.md
+**/AGENTS.md
