@@ -39,7 +39,7 @@ flowchart TD
     OBS --> U
 ```
 
-深入阅读：[系统架构与模块导航](docs/architecture.md) · [RAG 设计与检索优化](docs/rag.md) · [完整实测验证报告](docs/verification.md) · [云端与 Docker 部署指南](docs/deployment.md)
+深入阅读：[前端使用说明](docs/user-guide.md) · [系统架构与模块导航](docs/architecture.md) · [RAG 设计与检索优化](docs/rag.md) · [完整实测验证报告](docs/verification.md) · [云端与 Docker 部署指南](docs/deployment.md)
 
 ---
 
